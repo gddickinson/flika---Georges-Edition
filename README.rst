@@ -2,8 +2,10 @@ flika v0.3.0
 ============
 
 .. image:: flika/docs/_static/img/flika_screenshot.png
+   :alt: flika menu bar and ROI toolbar
 
 .. image:: flika/docs/_static/img/flika_screencapture.gif
+   :alt: flika in action (original interface demo)
 
 **flika** is an interactive image processing program for biologists written in
 Python.  This fork extends the `original flika <https://github.com/flika-org/flika>`_
