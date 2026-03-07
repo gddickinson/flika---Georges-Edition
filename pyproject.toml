@@ -85,6 +85,9 @@ model-zoo = [
 denoising = [
     "careamics>=0.1",
 ]
+detection = [
+    "ultralytics>=8.0",
+]
 spt = [
     "trackpy>=0.6",
 ]

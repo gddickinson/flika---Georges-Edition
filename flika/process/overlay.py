@@ -8,7 +8,8 @@ from .. import global_vars as g
 from ..utils.BaseProcess import (BaseProcess, SliderLabel, WindowSelector,
                                  MissingWindowError, CheckBox, ComboBox)
 
-__all__ = ['time_stamp', 'background', 'scale_bar']
+__all__ = ['time_stamp', 'background', 'scale_bar', 'grid_overlay',
+           'counting_tool', 'bake_overlays_process']
 
 
 # ---------------------------------------------------------------------------
@@ -766,6 +767,228 @@ def _round_to_nice(value):
     else:
         nice = 10
     return nice * (10 ** exponent)
+
+
+# ---------------------------------------------------------------------------
+# Grid Overlay
+# ---------------------------------------------------------------------------
+
+class Grid_Overlay(BaseProcess):
+    """grid_overlay(grid_type, spacing_x, spacing_y, divisions_x, divisions_y,
+                    color, width, opacity, style, use_divisions, show)
+
+    Adds a configurable grid overlay to the current window.
+
+    Parameters:
+        grid_type (str): 'Rectangular', 'Crosshair', 'Rule of Thirds',
+                         'Dot Grid', or 'Polar'.
+        spacing_x (int): Pixel spacing between vertical lines.
+        spacing_y (int): Pixel spacing between horizontal lines.
+        divisions_x (int): Number of horizontal divisions.
+        divisions_y (int): Number of vertical divisions.
+        color (str): Grid color.
+        width (float): Line width.
+        opacity (float): Opacity (0-1).
+        style (str): 'solid', 'dash', 'dot', 'dash-dot'.
+        use_divisions (bool): Use divisions instead of spacing.
+        show (bool): Show or hide the grid.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        if g.win is None:
+            g.alert("No window is currently selected.")
+            return
+
+        grid_type = ComboBox()
+        grid_type.addItems(['Rectangular', 'Crosshair', 'Rule of Thirds',
+                            'Dot Grid', 'Polar'])
+        spacing_x = QtWidgets.QSpinBox()
+        spacing_x.setRange(5, 5000)
+        spacing_x.setValue(50)
+        spacing_y = QtWidgets.QSpinBox()
+        spacing_y.setRange(5, 5000)
+        spacing_y.setValue(50)
+        divisions_x = QtWidgets.QSpinBox()
+        divisions_x.setRange(1, 100)
+        divisions_x.setValue(4)
+        divisions_y = QtWidgets.QSpinBox()
+        divisions_y.setRange(1, 100)
+        divisions_y.setValue(4)
+        color = _make_color_combo(_PRESET_COLORS, 'Yellow')
+        width_spin = QtWidgets.QDoubleSpinBox()
+        width_spin.setRange(0.5, 10)
+        width_spin.setValue(1.0)
+        width_spin.setSingleStep(0.5)
+        opacity = SliderLabel(2)
+        opacity.setRange(0, 1)
+        opacity.setValue(0.4)
+        style = ComboBox()
+        style.addItems(['solid', 'dash', 'dot', 'dash-dot'])
+        use_divisions = CheckBox()
+        show = CheckBox()
+        show.setChecked(True)
+
+        self.items.append({'name': 'grid_type', 'string': 'Grid Type', 'object': grid_type})
+        self.items.append({'name': 'spacing_x', 'string': 'Spacing X', 'object': spacing_x})
+        self.items.append({'name': 'spacing_y', 'string': 'Spacing Y', 'object': spacing_y})
+        self.items.append({'name': 'divisions_x', 'string': 'Divisions X', 'object': divisions_x})
+        self.items.append({'name': 'divisions_y', 'string': 'Divisions Y', 'object': divisions_y})
+        self.items.append({'name': 'color', 'string': 'Color', 'object': color})
+        self.items.append({'name': 'width', 'string': 'Line Width', 'object': width_spin})
+        self.items.append({'name': 'opacity', 'string': 'Opacity', 'object': opacity})
+        self.items.append({'name': 'style', 'string': 'Line Style', 'object': style})
+        self.items.append({'name': 'use_divisions', 'string': 'Use Divisions', 'object': use_divisions})
+        self.items.append({'name': 'show', 'string': 'Show', 'object': show})
+        super().gui()
+
+    def __call__(self, grid_type='Rectangular', spacing_x=50, spacing_y=50,
+                 divisions_x=4, divisions_y=4, color='Yellow', width=1.0,
+                 opacity=0.4, style='solid', use_divisions=False, show=True,
+                 keepSourceWindow=None):
+        w = g.win
+        if w is None:
+            return
+
+        from ..viewers.grid_overlay import GridOverlay
+        if not hasattr(w, '_grid_overlay') or w._grid_overlay is None:
+            w._grid_overlay = GridOverlay(w)
+
+        if not show:
+            w._grid_overlay.clear()
+            return None
+
+        if grid_type == 'Rectangular':
+            w._grid_overlay.draw_rectangular(
+                spacing_x=spacing_x, spacing_y=spacing_y,
+                color=color, width=width, opacity=opacity, style=style,
+                divisions_mode=use_divisions,
+                divisions_x=divisions_x, divisions_y=divisions_y)
+        elif grid_type == 'Crosshair':
+            w._grid_overlay.draw_crosshair(
+                color=color, width=width, opacity=opacity, style=style)
+        elif grid_type == 'Rule of Thirds':
+            w._grid_overlay.draw_thirds(
+                color=color, width=width, opacity=opacity, style=style)
+        elif grid_type == 'Dot Grid':
+            w._grid_overlay.draw_dot_grid(
+                spacing_x=spacing_x, spacing_y=spacing_y,
+                color=color, dot_size=3, opacity=opacity)
+        elif grid_type == 'Polar':
+            w._grid_overlay.draw_polar(
+                color=color, width=width, opacity=opacity, style=style)
+        return None
+
+    def preview(self):
+        vals = {}
+        for item in self.items:
+            obj = item['object']
+            if hasattr(obj, 'value') and callable(obj.value):
+                vals[item['name']] = obj.value()
+            elif hasattr(obj, 'currentText') and callable(obj.currentText):
+                vals[item['name']] = obj.currentText()
+            elif hasattr(obj, 'isChecked') and callable(obj.isChecked):
+                vals[item['name']] = obj.isChecked()
+        self.__call__(**vals)
+
+
+grid_overlay = Grid_Overlay()
+
+
+# ---------------------------------------------------------------------------
+# Counting Tool (launcher)
+# ---------------------------------------------------------------------------
+
+class Counting_Tool(BaseProcess):
+    """counting_tool()
+
+    Opens the counting tool panel for manual object counting.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        from ..viewers.counting_overlay import CountingPanel
+        panel = CountingPanel.instance(g.m)
+        if g.m is not None:
+            g.m.addDockWidget(QtCore.Qt.RightDockWidgetArea, panel)
+        panel.show()
+        panel.raise_()
+
+    def __call__(self, keepSourceWindow=None):
+        self.gui()
+
+
+counting_tool = Counting_Tool()
+
+
+# ---------------------------------------------------------------------------
+# Bake Overlays
+# ---------------------------------------------------------------------------
+
+class Bake_Overlays(BaseProcess):
+    """bake_overlays_process(include_rois, include_grid, include_scale_bar,
+                             include_timestamp, create_new_window)
+
+    Burns visible overlays into image pixel data.
+
+    Parameters:
+        include_rois (bool): Include ROIs.
+        include_grid (bool): Include grid overlay.
+        include_scale_bar (bool): Include scale bar.
+        include_timestamp (bool): Include timestamp.
+        create_new_window (bool): Create new window with baked result.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        if g.win is None:
+            g.alert("No window is currently selected.")
+            return
+
+        include_rois = CheckBox()
+        include_rois.setChecked(True)
+        include_grid = CheckBox()
+        include_grid.setChecked(True)
+        include_scale_bar = CheckBox()
+        include_scale_bar.setChecked(True)
+        include_timestamp = CheckBox()
+        include_timestamp.setChecked(True)
+        create_new_window = CheckBox()
+        create_new_window.setChecked(True)
+
+        self.items.append({'name': 'include_rois', 'string': 'Include ROIs', 'object': include_rois})
+        self.items.append({'name': 'include_grid', 'string': 'Include Grid', 'object': include_grid})
+        self.items.append({'name': 'include_scale_bar', 'string': 'Include Scale Bar', 'object': include_scale_bar})
+        self.items.append({'name': 'include_timestamp', 'string': 'Include Timestamp', 'object': include_timestamp})
+        self.items.append({'name': 'create_new_window', 'string': 'New Window', 'object': create_new_window})
+        super().gui()
+
+    def __call__(self, include_rois=True, include_grid=True,
+                 include_scale_bar=True, include_timestamp=True,
+                 create_new_window=True, keepSourceWindow=None):
+        w = g.win
+        if w is None:
+            return
+        from ..viewers.overlay_manager import bake_overlays
+        return bake_overlays(
+            w,
+            include_rois=include_rois,
+            include_grid=include_grid,
+            include_scale_bar=include_scale_bar,
+            include_timestamp=include_timestamp,
+            create_new_window=create_new_window,
+        )
+
+
+bake_overlays_process = Bake_Overlays()
 
 
 logger.debug("Completed 'reading process/overlay.py'")

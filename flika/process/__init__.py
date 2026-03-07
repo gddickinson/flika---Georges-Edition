@@ -24,6 +24,17 @@ from .export import *
 from .linescan import *
 from .background_sub import *
 
+def _show_overlay_manager():
+    """Open the Overlay Manager dock widget from the menu."""
+    from .. import global_vars as g
+    from ..viewers.overlay_manager import OverlayManagerPanel
+    from qtpy.QtCore import Qt
+    panel = OverlayManagerPanel.instance(g.m)
+    g.m.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, panel)
+    panel.show()
+    panel.raise_()
+
+
 def _show_results_table():
     """Open the SPT Results Table dock widget from the menu."""
     from .. import global_vars as g
@@ -98,7 +109,12 @@ def setup_menus():
     addAction(overlayMenu, "Background", background.gui)
     addAction(overlayMenu, "Timestamp", time_stamp.gui)
     addAction(overlayMenu, "Scale Bar", scale_bar.gui)
+    addAction(overlayMenu, "Grid", grid_overlay.gui)
+    addAction(overlayMenu, "Counting Tool", counting_tool.gui)
     addAction(overlayMenu, "Track Overlay", lambda: __import__('flika.viewers.track_overlay', fromlist=['show_track_overlay']).show_track_overlay())
+    overlayMenu.addSeparator()
+    addAction(overlayMenu, "Bake Overlays", bake_overlays_process.gui)
+    addAction(overlayMenu, "Overlay Manager", _show_overlay_manager)
 
     # ---- Process > Binary ----
     binaryMenu = processMenu.addMenu("Binary")

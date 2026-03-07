@@ -255,6 +255,42 @@ class AISAMSegmenter:
         g.dialogs.append(dlg)
 
 
+class AIObjectDetector:
+    """AI Object Detection — opens detection/annotation/training dialog.
+
+    Supports pretrained YOLO models, custom training, and fine-tuning
+    via the Ultralytics backend.
+    """
+
+    def gui(self):
+        from .detection_dialog import ObjectDetectionDialog
+        dlg = ObjectDetectionDialog(parent=g.m)
+        dlg.show()
+        g.dialogs.append(dlg)
+
+    def predict(self, model='yolov8n.pt', confidence=0.25, iou=0.45,
+                device='Auto', create_rois=True):
+        """Non-GUI prediction for scripting/macros."""
+        from .detection_backend import DetectionConfig, UltralyticsBackend
+        if g.win is None:
+            g.alert('No window selected.')
+            return []
+        backend = UltralyticsBackend()
+        config = DetectionConfig(model_path=model, confidence=confidence,
+                                 iou_threshold=iou, device=device)
+        boxes = backend.predict(g.win.image, config)
+        if create_rois:
+            from .annotations import AnnotationSet, AnnotationClass
+            aset = AnnotationSet(
+                image_width=g.win.image.shape[-1],
+                image_height=g.win.image.shape[-2],
+            )
+            for b in boxes:
+                aset.add_box(b)
+            aset.to_rois(g.win)
+        return boxes
+
+
 # Singleton instances
 cellpose_segment = CellposeSegmenter()
 stardist_segment = StarDistSegmenter()
@@ -263,3 +299,4 @@ ai_classify = AIPixelClassifier()
 ai_localize = AIParticleLocalizer()
 ai_model_zoo = BioImageIORunner()
 ai_sam = AISAMSegmenter()
+ai_detect = AIObjectDetector()

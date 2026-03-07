@@ -293,6 +293,8 @@ class FlikaApplication(QtWidgets.QMainWindow):
         viewMenu.addAction('ROI Manager', self._toggle_roi_manager)
         viewMenu.addAction('Metadata Editor', self._show_metadata_editor)
         viewMenu.addAction('Figure Composer', self._show_figure_composer)
+        viewMenu.addAction('Overlay Manager', self._show_overlay_manager)
+        viewMenu.addAction('Counting Tool', self._show_counting_tool)
 
         for menu in g.menus:
             self.menuBar().addMenu(menu)
@@ -313,6 +315,7 @@ class FlikaApplication(QtWidgets.QMainWindow):
         aiSegMenu.addAction("Cellpose", self._ai_cellpose)
         aiSegMenu.addAction("StarDist", self._ai_stardist)
         aiSegMenu.addAction("SAM Interactive", self._ai_sam)
+        aiMenu.addAction("Object Detection", self._ai_detect)
         aiMenu.addAction("BioImage.IO Model Zoo", self._ai_model_zoo)
 
         helpMenu = self.menuBar().addMenu("Help")
@@ -378,6 +381,24 @@ class FlikaApplication(QtWidgets.QMainWindow):
     def _ai_sam(self):
         from ..ai.segmentation import ai_sam
         ai_sam.gui()
+
+    def _ai_detect(self):
+        from ..ai.segmentation import ai_detect
+        ai_detect.gui()
+
+    def _show_overlay_manager(self):
+        from ..viewers.overlay_manager import OverlayManagerPanel
+        panel = OverlayManagerPanel.instance(self)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, panel)
+        panel.show()
+        panel.raise_()
+
+    def _show_counting_tool(self):
+        from ..viewers.counting_overlay import CountingPanel
+        panel = CountingPanel.instance(self)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, panel)
+        panel.show()
+        panel.raise_()
 
     def _export_provenance(self):
         if g.win is None:
