@@ -122,6 +122,8 @@ _FALLBACK_OPTIONAL_DEPS = {
     'model-zoo': ["bioimageio.core>=0.6", "bioimageio.spec>=0.5"],
     'denoising': ["careamics>=0.1"],
     'detection': ["ultralytics>=8.0"],
+    'camera': ["opencv-python>=4.5"],
+    'camera-micro-manager': ["pymmcore-plus>=0.7"],
     'spt': ["trackpy>=0.6"],
 }
 

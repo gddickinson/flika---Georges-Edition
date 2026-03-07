@@ -651,7 +651,7 @@ class Window(QtWidgets.QWidget):
     def showFrame(self, index):
         if index>=0 and index<self.mt:
             msg = 'frame {}'.format(index)
-            if 'timestamps' in self.metadata and self.metadata['timestamp_units']=='ms':
+            if 'timestamps' in self.metadata and self.metadata.get('timestamp_units')=='ms':
                 ttime = self.metadata['timestamps'][index]
                 if ttime < 1*1000:
                     msg += '; {:.4f} ms'.format(ttime)

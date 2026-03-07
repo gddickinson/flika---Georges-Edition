@@ -238,7 +238,7 @@ class FlikaApplication(QtWidgets.QMainWindow):
         #self.setFixedSize(326, 80)
         #self.setMaximumSize(width_px*3, 120)
         self.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Minimum);
-        self.setMinimumWidth(450)
+        self.setMinimumWidth(540)
         self.move(0, 0)
 
     def _make_menu(self):
@@ -304,6 +304,9 @@ class FlikaApplication(QtWidgets.QMainWindow):
 
         self.scriptMenu = self.menuBar().addMenu('Scripts')
         self.scriptMenu.aboutToShow.connect(self._make_script_menu)
+
+        cameraMenu = self.menuBar().addMenu('Camera')
+        cameraMenu.addAction("Live Camera", self._show_camera)
 
         aiMenu = self.menuBar().addMenu('AI')
         aiMenu.addAction("Generate Script", self._ai_generate_script)
@@ -399,6 +402,10 @@ class FlikaApplication(QtWidgets.QMainWindow):
         self.addDockWidget(QtCore.Qt.RightDockWidgetArea, panel)
         panel.show()
         panel.raise_()
+
+    def _show_camera(self):
+        from ..camera.camera_dialog import show_camera_dialog
+        show_camera_dialog(parent=self)
 
     def _export_provenance(self):
         if g.win is None:
