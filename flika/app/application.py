@@ -212,8 +212,9 @@ class FlikaApplication(QtWidgets.QMainWindow):
         logger.debug("Completed 'creating app.application.FlikaApplication'")
 
     def plugins_done(self, plugins):
+        from .plugin_manager import is_plugin_disabled
         for p in plugins.values():
-            if p.loaded:
+            if p.loaded and not is_plugin_disabled(p.directory or ''):
                 p.bind_menu_and_methods()
         PluginManager.plugins = plugins
 
@@ -585,12 +586,14 @@ class FlikaApplication(QtWidgets.QMainWindow):
 
     def _make_plugin_menu(self):
         logger.debug('Making Plugin Manager')
+        from .plugin_manager import is_plugin_disabled
         self.pluginMenu.clear()
         self.pluginMenu.addAction('Plugin Manager', PluginManager.show)
         self.pluginMenu.addSeparator()
         logger.debug('Plugin Manager complete')
 
-        installedPlugins = [plugin for plugin in PluginManager.plugins.values() if plugin.installed]
+        installedPlugins = [plugin for plugin in PluginManager.plugins.values()
+                           if plugin.installed and not is_plugin_disabled(plugin.directory or '')]
         for plugin in sorted(installedPlugins, key=lambda a: -a.lastModified()):
             if isinstance(plugin.menu, QtWidgets.QMenu):
                 self.pluginMenu.addMenu(plugin.menu)

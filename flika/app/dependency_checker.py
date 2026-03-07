@@ -244,6 +244,8 @@ class CoreDependencyDialog(QtWidgets.QDialog):
         core_deps, optional_deps = _get_dependencies()
 
         lines = []
+        all_missing = []  # collect pip install specs for all missing/outdated
+
         lines.append("=== CORE DEPENDENCIES ===")
         lines.append("")
         lines.append(
@@ -262,14 +264,14 @@ class CoreDependencyDialog(QtWidgets.QDialog):
                 f"{status:<18} {action}")
             if "MISSING" in status or "OUTDATED" in status:
                 issues += 1
+                all_missing.append(dep_str)
 
         lines.append("")
         if issues == 0:
             lines.append("All core dependencies are satisfied.")
         else:
             lines.append(
-                f"{issues} core issue(s) found. "
-                "Copy the pip commands above to fix.")
+                f"{issues} core issue(s) found.")
 
         # Optional dependency groups
         if optional_deps:
@@ -298,6 +300,7 @@ class CoreDependencyDialog(QtWidgets.QDialog):
                     if "MISSING" in status or "OUTDATED" in status:
                         group_ok = False
                         opt_issues += 1
+                        all_missing.append(dep_str)
                 if group_ok:
                     lines.append("  All satisfied.")
                 lines.append("")
@@ -308,6 +311,18 @@ class CoreDependencyDialog(QtWidgets.QDialog):
                 lines.append(
                     f"{opt_issues} optional package(s) not installed. "
                     "Install groups as needed.")
+
+        # Combined install command
+        if all_missing:
+            lines.append("")
+            lines.append("")
+            lines.append("=== INSTALL ALL MISSING ===")
+            lines.append("")
+            lines.append("Run this command to install everything at once:")
+            lines.append("")
+            lines.append("pip install " + " ".join(
+                f'"{d}"' for d in all_missing))
+            lines.append("")
 
         self._text.setPlainText("\n".join(lines))
 
@@ -402,6 +417,7 @@ class PluginDependencyDialog(QtWidgets.QDialog):
             return
 
         total_issues = 0
+        all_missing = []
         for plugin_name, deps in plugin_deps.items():
             lines.append(f"=== {plugin_name} ===")
             for dep in deps:
@@ -410,13 +426,19 @@ class PluginDependencyDialog(QtWidgets.QDialog):
                     f"  {dep:<30} {ver:<12} {status:<12} {action}")
                 if "MISSING" in status:
                     total_issues += 1
+                    all_missing.append(dep)
             lines.append("")
 
         if total_issues == 0:
             lines.append("All plugin dependencies are satisfied.")
         else:
             lines.append(
-                f"{total_issues} missing plugin dependency(ies). "
-                "Copy the pip commands above to fix.")
+                f"{total_issues} missing plugin dependency(ies).")
+            lines.append("")
+            lines.append("Run this command to install everything at once:")
+            lines.append("")
+            lines.append("pip install " + " ".join(
+                f'"{d}"' for d in all_missing))
+            lines.append("")
 
         self._text.setPlainText("\n".join(lines))
