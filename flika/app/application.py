@@ -148,19 +148,23 @@ class Logger(QtWidgets.QWidget):
 class FlikaApplication(QtWidgets.QMainWindow):
     """The main window of flika, stored as g.m
     """
-    def __init__(self):
+    def __init__(self, headless=False):
         logger.debug("Started 'creating app.application.FlikaApplication'")
         from ..process.file_ import open_file, open_file_from_gui, open_image_sequence_from_gui, open_points, save_file, save_movie_gui, save_points, save_rois
         from ..process import setup_menus
+        self._headless = headless
         logger.debug("Started 'creating app.application.FlikaApplication.app'")
-        self.app = get_qapp(image_path('favicon.png'))
+        self.app = get_qapp(image_path('favicon.png'), headless=headless)
         logger.debug("Completed 'creating app.application.FlikaApplication.app'")
         super(FlikaApplication, self).__init__()
-        self.app.setQuitOnLastWindowClosed(True)
+        if not headless:
+            self.app.setQuitOnLastWindowClosed(True)
         setup_menus()
-        logger.debug("Started 'loading main.ui'")
-        load_ui('main.ui', self, directory=os.path.dirname(__file__))
-        logger.debug("Completed 'loading main.ui'")
+
+        if not headless:
+            logger.debug("Started 'loading main.ui'")
+            load_ui('main.ui', self, directory=os.path.dirname(__file__))
+            logger.debug("Completed 'loading main.ui'")
 
         g.m = self
         # These are all added for backwards compatibility for plugins
@@ -170,35 +174,41 @@ class FlikaApplication(QtWidgets.QMainWindow):
         self.currentWindow = g.win
         self.currentTrace = g.currentTrace
         self.clipboard = g.clipboard
-        self.setWindowSize()
-        if platform.system() == 'Windows':
-            myappid = 'flika-org.FLIKA.' + str(__version__)
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        self.menuBar().setNativeMenuBar(False)
-        self._make_menu()
-        self._make_tools()
 
-        self._log = Logger()
-        def handle_exception_wrapper(exc_type, exc_value, exc_traceback):
-            handle_exception(exc_type, exc_value, exc_traceback)
-            tb_str = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            tb_str = ''.join(tb_str)+'\n'
-            self._log.write(tb_str)
-        sys.excepthook = handle_exception_wrapper
+        if not headless:
+            self.setWindowSize()
+            if platform.system() == 'Windows':
+                myappid = 'flika-org.FLIKA.' + str(__version__)
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            self.menuBar().setNativeMenuBar(False)
+            self._make_menu()
+            self._make_tools()
 
-        g.dialogs.append(self._log)
-        self._log.window().setWindowTitle("Console Log")
-        self._log.resize(550, 550)
+            self._log = Logger()
+            def handle_exception_wrapper(exc_type, exc_value, exc_traceback):
+                handle_exception(exc_type, exc_value, exc_traceback)
+                tb_str = traceback.format_exception(exc_type, exc_value, exc_traceback)
+                tb_str = ''.join(tb_str)+'\n'
+                self._log.write(tb_str)
+            sys.excepthook = handle_exception_wrapper
 
-        self.statusBar().addPermanentWidget(self._log.status_light)
-        self.statusBar().setContentsMargins(2, 0, 20, 2)
-        self.statusBar().setSizeGripEnabled(False)
-        self.setCurrentWindowSignal = SetCurrentWindowSignal(self)
-        self.setAcceptDrops(True)
-        self.load_local_plugins_thread = Load_Local_Plugins_Thread()
-        self.load_local_plugins_thread.start()
-        self.load_local_plugins_thread.plugins_done_sig.connect(self.plugins_done)
-        self.load_local_plugins_thread.error_loading.connect(g.alert)
+            g.dialogs.append(self._log)
+            self._log.window().setWindowTitle("Console Log")
+            self._log.resize(550, 550)
+
+            self.statusBar().addPermanentWidget(self._log.status_light)
+            self.statusBar().setContentsMargins(2, 0, 20, 2)
+            self.statusBar().setSizeGripEnabled(False)
+            self.setCurrentWindowSignal = SetCurrentWindowSignal(self)
+            self.setAcceptDrops(True)
+            self.load_local_plugins_thread = Load_Local_Plugins_Thread()
+            self.load_local_plugins_thread.start()
+            self.load_local_plugins_thread.plugins_done_sig.connect(self.plugins_done)
+            self.load_local_plugins_thread.error_loading.connect(g.alert)
+        else:
+            # Minimal headless init
+            self.setCurrentWindowSignal = SetCurrentWindowSignal(self)
+
         logger.debug("Completed 'creating app.application.FlikaApplication'")
 
     def plugins_done(self, plugins):
@@ -253,6 +263,21 @@ class FlikaApplication(QtWidgets.QMainWindow):
         saveMenu.addSeparator()
         saveMenu.addAction("Export Provenance", self._export_provenance)
 
+        fileMenu.addSeparator()
+        interopMenu = fileMenu.addMenu("Interop")
+        interopMenu.addAction("Send to napari", self._send_to_napari)
+        interopMenu.addAction("Import from napari", self._import_from_napari)
+        interopMenu.addSeparator()
+        ijMenu = interopMenu.addMenu("ImageJ")
+        ijMenu.addAction("Send to ImageJ", self._send_to_imagej)
+        ijMenu.addAction("Import from ImageJ", self._import_from_imagej)
+        interopMenu.addSeparator()
+        interopMenu.addAction("Export OME-TIFF", self._export_ome_tiff)
+        interopMenu.addAction("Export OME-Zarr", self._export_ome_zarr)
+
+        fileMenu.addSeparator()
+        fileMenu.addAction("Batch Process...", self._batch_process)
+        fileMenu.addSeparator()
         fileMenu.addAction("Settings", SettingsEditor.show)
         fileMenu.addAction("&Quit", self.close)
 
@@ -388,6 +413,66 @@ class FlikaApplication(QtWidgets.QMainWindow):
         from .gpu_status import GPUStatusDialog
         dlg = GPUStatusDialog(self)
         dlg.exec()
+
+    def _send_to_napari(self):
+        try:
+            from ..interop.napari_bridge import to_napari
+            to_napari()
+        except ImportError:
+            g.alert('napari is not installed. Install with: pip install napari')
+
+    def _import_from_napari(self):
+        try:
+            import napari
+            from ..interop.napari_bridge import from_napari
+            viewer = napari.current_viewer()
+            if viewer is None or len(viewer.layers) == 0:
+                g.alert('No napari viewer or layers found')
+                return
+            from_napari(viewer.layers[-1])
+        except ImportError:
+            g.alert('napari is not installed. Install with: pip install napari')
+
+    def _send_to_imagej(self):
+        try:
+            from ..interop.imagej_bridge import to_imagej
+            to_imagej()
+        except ImportError:
+            g.alert('pyimagej is not installed. Install with: pip install pyimagej')
+
+    def _import_from_imagej(self):
+        try:
+            from ..interop.imagej_bridge import from_imagej
+            from_imagej()
+        except ImportError:
+            g.alert('pyimagej is not installed. Install with: pip install pyimagej')
+
+    def _export_ome_tiff(self):
+        from ..interop.ome import to_ome_tiff
+        to_ome_tiff()
+
+    def _export_ome_zarr(self):
+        from ..interop.ome import to_ome_zarr
+        to_ome_zarr()
+
+    def _batch_process(self):
+        from ..batch import BatchProcessor
+        from ..utils.misc import open_file_gui
+        script = open_file_gui('Select macro script', filetypes='*.py')
+        if not script:
+            return
+        directory = QtWidgets.QFileDialog.getExistingDirectory(self, 'Select input directory')
+        if not directory:
+            return
+        output_dir = QtWidgets.QFileDialog.getExistingDirectory(self, 'Select output directory')
+        if not output_dir:
+            return
+        files = BatchProcessor.collect_files(directory)
+        if not files:
+            g.alert('No supported files found in directory')
+            return
+        bp = BatchProcessor(None, files, output_dir)
+        bp.run_from_macro(script)
 
     def __getattr__(self, item):
         if item in self.__dict__:

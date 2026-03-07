@@ -60,7 +60,7 @@ class Channel_Compositor(BaseProcess):
         panel.show()
         panel.raise_()
 
-        g.m.statusBar().showMessage('Channel Compositor opened. Add channels from the panel.')
+        g.status_msg('Channel Compositor opened. Add channels from the panel.')
         return None
 
 

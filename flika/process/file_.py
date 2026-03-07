@@ -45,7 +45,7 @@ def save_file(filename=None):
     if os.path.dirname(filename) == '':  # if the user didn't specify a directory
         directory = os.path.normpath(os.path.dirname(g.settings['filename']))
         filename = os.path.join(directory, filename)
-    g.m.statusBar().showMessage(f'Saving {os.path.basename(filename)}')
+    g.status_msg(f'Saving {os.path.basename(filename)}')
     # Save the full 4D volume when available, otherwise the 3D image
     A = g.win.volume if g.win.volume is not None else g.win.image
     if A.dtype == bool:
@@ -76,7 +76,7 @@ def save_file(filename=None):
         except (ValueError, NotImplementedError) as e:
             g.alert(f"Cannot save to '{ext}' format: {e}")
             return None
-    g.m.statusBar().showMessage(f'Successfully saved {os.path.basename(filename)}')
+    g.status_msg(f'Successfully saved {os.path.basename(filename)}')
     return filename
 
 def save_points(filename=None):
@@ -95,7 +95,7 @@ def save_points(filename=None):
         filename = save_file_gui(prompt, filetypes=filetypes)
         if filename is None:
             return None
-    g.m.statusBar().showMessage(f'Saving Points in {os.path.basename(filename)}')
+    g.status_msg(f'Saving Points in {os.path.basename(filename)}')
     p_out = []
     p_in = g.win.scatterPoints
     for t in np.arange(len(p_in)):
@@ -103,7 +103,7 @@ def save_points(filename=None):
             p_out.append(np.array([t, p[0], p[1]]))
     p_out = np.array(p_out)
     np.savetxt(filename, p_out)
-    g.m.statusBar().showMessage(f'Successfully saved {os.path.basename(filename)}')
+    g.status_msg(f'Successfully saved {os.path.basename(filename)}')
     return filename
 
 
@@ -184,7 +184,7 @@ def save_movie(rate, filename=None):
         ['ffmpeg', '-r', '%d' % rate, '-i', '%03d.jpg', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', 'output.mp4'])
     os.rename('output.mp4', filename)
     os.chdir(olddir)
-    g.m.statusBar().showMessage(f'Successfully saved movie as {os.path.basename(filename)}.')
+    g.status_msg(f'Successfully saved movie as {os.path.basename(filename)}.')
 
 
 
@@ -230,7 +230,7 @@ def open_image_sequence(filename=None, from_gui=False):
                 g.alert('No filename selected')
                 return None
     logger.info(f"Filename: {filename}")
-    g.m.statusBar().showMessage(f'Loading {os.path.basename(filename)}')
+    g.status_msg(f'Loading {os.path.basename(filename)}')
     t = time.time()
     metadata = dict()
 
@@ -255,7 +255,7 @@ def open_image_sequence(filename=None, from_gui=False):
 
     append_recent_file(str(filename))  # make first in recent file menu
     msg = f'{filename.parts[-1]} successfully loaded ({time.time() - t} s)'
-    g.m.statusBar().showMessage(msg)
+    g.status_msg(msg)
     g.settings['filename'] = str(filename)
     commands = [f"open_image_sequence('{str(filename)}')"]
     new_window = Window(all_images, filename.parts[-1], str(filename), commands, metadata)
@@ -285,7 +285,7 @@ def open_file(filename=None, from_gui=False):
                 g.alert('No filename selected')
                 return None
     logger.info(f"Filename: {filename}")
-    g.m.statusBar().showMessage(f'Loading {os.path.basename(str(filename))}')
+    g.status_msg(f'Loading {os.path.basename(str(filename))}')
     t = time.time()
     metadata = dict()
     # Check for directory-based formats (e.g., .ome.zarr)
@@ -297,7 +297,7 @@ def open_file(filename=None, from_gui=False):
             metadata.update(meta)
             append_recent_file(str(filename))
             msg = f'{os.path.basename(str(filename))} successfully loaded ({time.time() - t} s)'
-            g.m.statusBar().showMessage(msg)
+            g.status_msg(msg)
             g.settings['filename'] = str(filename)
             command = f"open_file('{filename}')"
             commands = [command]
@@ -325,7 +325,7 @@ def open_file(filename=None, from_gui=False):
             A[frame] = nd2[frame].T
             if percent < int(100 * float(frame) / mt):
                 percent = int(100 * float(frame) / mt)
-                g.m.statusBar().showMessage(f'Loading file {percent}%')
+                g.status_msg(f'Loading file {percent}%')
                 QtWidgets.QApplication.processEvents()
         metadata = nd2.metadata
     elif ext == '.py':
@@ -369,7 +369,7 @@ def open_file(filename=None, from_gui=False):
 
     append_recent_file(str(filename))  # make first in recent file menu
     msg = f'{os.path.basename(str(filename))} successfully loaded ({time.time() - t} s)'
-    g.m.statusBar().showMessage(msg)
+    g.status_msg(msg)
     g.settings['filename'] = str(filename)
     command = f"open_file('{filename}')"
     commands = [command]
@@ -539,7 +539,7 @@ def open_points(filename=None):
         if filename is None:
             return None
     msg = f'Loading points from {os.path.basename(filename)}'
-    g.m.statusBar().showMessage(msg)
+    g.status_msg(msg)
     try:
         pts = np.loadtxt(filename)
     except UnicodeDecodeError:
@@ -575,7 +575,7 @@ def open_points(filename=None):
         t = g.win.currentIndex
         g.win.scatterPlot.setData(pos=g.win.scatterPoints[t])
 
-    g.m.statusBar().showMessage(f'Successfully loaded {os.path.basename(filename)}')
+    g.status_msg(f'Successfully loaded {os.path.basename(filename)}')
 
 
 def open_spt_results(filename=None):
@@ -615,7 +615,7 @@ def open_spt_results(filename=None):
         if filename is None:
             return None
 
-    g.m.statusBar().showMessage(f'Loading SPT results from {os.path.basename(filename)}...')
+    g.status_msg(f'Loading SPT results from {os.path.basename(filename)}...')
 
     try:
         pdata = _load_spt_file(filename)
@@ -651,7 +651,7 @@ def open_spt_results(filename=None):
     if n_tracks > 0:
         msg += f' in {n_tracks} tracks'
     msg += f' from {os.path.basename(filename)}'
-    g.m.statusBar().showMessage(msg)
+    g.status_msg(msg)
     logger.info(msg)
 
     # Display particles on window
@@ -1076,11 +1076,11 @@ def close(windows=None):
 """
 
 def save_roi_traces(filename):
-    g.m.statusBar().showMessage('Saving traces to {}'.format(os.path.basename(filename)))
+    g.status_msg('Saving traces to {}'.format(os.path.basename(filename)))
     to_save = [roi.getTrace() for roi in g.win.rois]
     np.savetxt(filename, np.transpose(to_save), header='\t'.join(['ROI %d' % i for i in range(len(to_save))]), fmt='%.4f', delimiter='\t', comments='')
     g.settings['filename'] = filename
-    g.m.statusBar().showMessage('Successfully saved traces to {}'.format(os.path.basename(filename)))
+    g.status_msg('Successfully saved traces to {}'.format(os.path.basename(filename)))
 
 def load_metadata(filename=None):
     '''This function loads the .txt file corresponding to a file into a dictionary
@@ -1127,7 +1127,7 @@ def save_current_frame(filename):
     if os.path.dirname(filename)=='': #if the user didn't specify a directory
         directory=os.path.normpath(os.path.dirname(g.settings['filename']))
         filename=os.path.join(directory,filename)
-    g.m.statusBar().showMessage('Saving {}'.format(os.path.basename(filename)))
+    g.status_msg('Saving {}'.format(os.path.basename(filename)))
     A=np.average(g.win.image, 0)#.astype(g.settings['internal_data_type'])
     metadata=json.dumps(g.win.metadata)
     if len(A.shape)==3:
@@ -1136,7 +1136,7 @@ def save_current_frame(filename):
     elif len(A.shape)==2:
         A=np.transpose(A,(1,0))
     tifffile.imsave(filename, A, description=metadata) #http://stackoverflow.com/questions/20529187/what-is-the-best-way-to-save-image-metadata-alongside-a-tif-with-python
-    g.m.statusBar().showMessage('Successfully saved {}'.format(os.path.basename(filename)))
+    g.status_msg('Successfully saved {}'.format(os.path.basename(filename)))
 
 def make_recent_menu():
     g.m.menuRecent_Files.clear()

@@ -40,7 +40,7 @@ class Split_channels(BaseProcess):
             newWindows.append(newWindow)
         if keepSourceWindow is False:
             self.oldwindow.close()
-        g.m.statusBar().showMessage('Finished with {}.'.format(self.__name__))
+        g.status_msg('Finished with {}.'.format(self.__name__))
         return newWindows
 
 
@@ -84,7 +84,7 @@ class Blend_Channels(BaseProcess):
 
     def __call__(self, window1, window2, mode='Additive', alpha=0.5, keepSourceWindow=False):
         self.keepSourceWindow = keepSourceWindow
-        g.m.statusBar().showMessage('Performing {}...'.format(self.__name__))
+        g.status_msg('Performing {}...'.format(self.__name__))
         if window1 is None or window2 is None:
             raise MissingWindowError("Select two windows to blend.")
 
@@ -144,7 +144,7 @@ class Blend_Channels(BaseProcess):
         if keepSourceWindow is False:
             window1.close()
             window2.close()
-        g.m.statusBar().showMessage('Finished with {}.'.format(self.__name__))
+        g.status_msg('Finished with {}.'.format(self.__name__))
         metadata = {'is_rgb': True}
         newWindow = Window(self.newtif, str(self.newname), self.oldwindow.filename, metadata=metadata)
         del self.newtif

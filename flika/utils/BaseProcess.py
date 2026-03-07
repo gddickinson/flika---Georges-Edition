@@ -15,10 +15,19 @@ __all__ = ['MissingWindowError', 'WindowSelector', 'FileSelector', 'ColorSelecto
            'SliderLabelOdd', 'CheckBox', 'ComboBox', 'BaseDialog', 'BaseProcess', 'BaseProcess_noPriorWindow']
 
 
+def _status_msg(msg):
+    """Show a message on the status bar if the main window exists and is not headless."""
+    if g.m is not None and not getattr(g, 'headless', False):
+        try:
+            g.m.statusBar().showMessage(msg)
+        except (RuntimeError, AttributeError):
+            pass
+
+
 class MissingWindowError(Exception):
     def __init__(self, value):
         self.value = value
-        g.m.statusBar().showMessage(value)
+        _status_msg(value)
 
     def __str__(self):
         return repr(self.value)
@@ -418,7 +427,7 @@ class BaseProcess(object):
         # Record command for macro playback
         from ..app.macro_recorder import macro_recorder
         macro_recorder.record(self.command)
-        g.m.statusBar().showMessage('Running function {}...'.format(self.__name__))
+        _status_msg('Running function {}...'.format(self.__name__))
         self.keepSourceWindow = keepSourceWindow
         self.oldwindow = g.win
         if self.oldwindow is None:
@@ -478,7 +487,7 @@ class BaseProcess(object):
                 output_window=str(self.newname) if hasattr(self, 'newname') else '',
                 output_shape=tuple(newWindow.image.shape) if newWindow is not None else (),
             )
-        g.m.statusBar().showMessage('Finished with {}.'.format(self.__name__))
+        _status_msg('Finished with {}.'.format(self.__name__))
         del self.tif
         del self.newtif
         return newWindow
@@ -555,7 +564,7 @@ class BaseProcess_noPriorWindow(BaseProcess):
         # Record command for macro playback
         from ..app.macro_recorder import macro_recorder
         macro_recorder.record(self.command)
-        g.m.statusBar().showMessage('Performing {}...'.format(self.__name__))
+        _status_msg('Performing {}...'.format(self.__name__))
 
     def end(self):
         from .. import window
@@ -564,7 +573,7 @@ class BaseProcess_noPriorWindow(BaseProcess):
             self.newname), commands=commands)
         if np.max(self.newtif) == 1 and np.min(self.newtif) == 0:  # if the array is boolean
             newWindow.imageview.setLevels(-.1, 1.1)
-        g.m.statusBar().showMessage('Finished with {}.'.format(self.__name__))
+        _status_msg('Finished with {}.'.format(self.__name__))
         del self.newtif
         return newWindow
 

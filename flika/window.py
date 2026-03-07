@@ -262,9 +262,9 @@ class Window(QtWidgets.QWidget):
         from .io.lazy import is_lazy
         if is_lazy(tif):
             self._lazy_source = tif
-            g.m.statusBar().showMessage(f'Materializing {name} ({tif.shape})...')
+            g.status_msg(f'Materializing {name} ({tif.shape})...')
             tif = tif.materialize()
-            g.m.statusBar().showMessage(f'{name} loaded.')
+            g.status_msg(f'{name} loaded.')
         else:
             self._lazy_source = None
         self.image = tif
@@ -509,7 +509,7 @@ class Window(QtWidgets.QWidget):
         # Grab the graphics view which contains the image, ROIs, and all overlays
         pixmap = self.imageview.ui.graphicsView.grab()
         pixmap.save(filepath)
-        g.m.statusBar().showMessage(f'Snapshot saved to {filepath}')
+        g.status_msg(f'Snapshot saved to {filepath}')
 
     def _open_roi_manager(self):
         """Open the ROI Manager panel from the main application."""
@@ -669,7 +669,7 @@ class Window(QtWidgets.QWidget):
                     minutes = int(np.floor(mminutes / 60))
                     seconds = mminutes - minutes * 60
                     msg += '; {} h {} m {:.4f} s'.format(hours, minutes, seconds)
-            g.m.statusBar().showMessage(msg)
+            g.status_msg(msg)
 
     def setName(self,name):
         """setName(self,name)
@@ -688,7 +688,7 @@ class Window(QtWidgets.QWidget):
             self.imageview.setImage(self.image, autoLevels=True) #I had autoLevels=False before.  I changed it to adjust after boolean previews.
             if self.imageview.axes['t'] is not None:
                 self.imageview.setCurrentIndex(currentIndex)
-            g.m.statusBar().showMessage('')
+            g.status_msg('')
 
     def closeEvent(self, event):
         if self.closed:
@@ -895,7 +895,7 @@ class Window(QtWidgets.QWidget):
             reprs = '\n'.join(reprs)
             open(filename, 'w').write(reprs)
         else:
-            g.m.statusBar().showMessage('No File Selected')
+            g.status_msg('No File Selected')
 
     
     def keyPressEvent(self, ev):
@@ -970,7 +970,7 @@ class Window(QtWidgets.QWidget):
         else:
             z=self.imageview.currentIndex
             value=image[int(self.x),int(self.y)]
-            g.m.statusBar().showMessage('x={}, y={}, z={}, value={}'.format(int(self.x),int(self.y),z,value))
+            g.status_msg('x={}, y={}, z={}, value={}'.format(int(self.x),int(self.y),z,value))
             # Only forward crosshair when crosshair mode is active (hold C)
             if self._crosshair_active:
                 self._update_crosshair_lines(self.x, self.y)
@@ -1104,5 +1104,9 @@ def get_line(x1, y1, x2, y2):
     if swapped:
         points.reverse()
     return np.array(points)
+
+# Add array interoperability protocols to Window class
+from .interop.array_protocol import add_array_protocol
+add_array_protocol(Window)
 
 logger.debug("Completed 'reading window.py'")

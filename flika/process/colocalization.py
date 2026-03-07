@@ -364,7 +364,7 @@ class Colocalization(BaseProcess):
                     )
                     mask[yy[valid], xx[valid]] = True
             else:
-                g.m.statusBar().showMessage('No ROI found; analysing full image.')
+                g.status_msg('No ROI found; analysing full image.')
 
         # --- Compute metrics ---
         r = pearson_correlation(img1, img2, mask)
@@ -406,7 +406,7 @@ class Colocalization(BaseProcess):
         window1.metadata['colocalization'] = results
 
         # Status bar summary
-        g.m.statusBar().showMessage(
+        g.status_msg(
             f'Colocalization: Pearson r={r:.3f}, M1={M1:.3f}, M2={M2:.3f}, ICQ={icq:.3f}'
         )
 

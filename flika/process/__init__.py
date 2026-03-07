@@ -15,6 +15,13 @@ from .compositing import *
 from .colocalization import *
 from .watershed import *
 from .spt import *
+from .segmentation import *
+from .detection import *
+from .alignment import *
+from .kymograph import *
+from .mask_editor import *
+from .export import *
+from .linescan import *
 
 def _show_results_table():
     """Open the SPT Results Table dock widget from the menu."""
@@ -49,12 +56,13 @@ def setup_menus():
     def addAction(menu, name, trigger):
         menu.addAction(QtWidgets.QAction(name, menu, triggered=trigger))
 
+    # ---- Image > Stacks ----
     stacksMenu = imageMenu.addMenu("Stacks")
-
     addAction(stacksMenu, "Duplicate", duplicate)
     addAction(stacksMenu, "Generate Random Image", generate_random_image.gui)
     addAction(stacksMenu, "Generate Phantom Volume", generate_phantom_volume.gui)
     addAction(stacksMenu, "Trim Frames", trim.gui)
+    addAction(stacksMenu, "Remove Frames", frame_remover.gui)
     addAction(stacksMenu, "Deinterlace", deinterleave.gui)
     addAction(stacksMenu, "Z Project", zproject.gui)
     addAction(stacksMenu, "Pixel Binning", pixel_binning.gui)
@@ -66,42 +74,63 @@ def setup_menus():
     addAction(stacksMenu, "Shear Transform", shear_transform.gui)
     addAction(stacksMenu, "Motion Correction", motion_correction.gui)
 
+    # ---- Image > Alignment ----
+    alignMenu = imageMenu.addMenu("Alignment")
+    addAction(alignMenu, "Channel Alignment", channel_alignment.gui)
+
+    # ---- Image > Color ----
     colorMenu = imageMenu.addMenu("Color")
     addAction(colorMenu, "Split Channels", split_channels.gui)
     addAction(colorMenu, "Blend Channels", blend_channels.gui)
     addAction(colorMenu, "Channel Compositor", channel_compositor.gui)
 
-    addAction(imageMenu, "Measure", measure.gui)
+    # ---- Image > Measure ----
+    measureMenu = imageMenu.addMenu("Measure")
+    addAction(measureMenu, "Measure", measure.gui)
+    addAction(measureMenu, "Linescan", linescan.gui)
+    addAction(measureMenu, "Kymograph", kymograph.gui)
+
     addAction(imageMenu, "Set Value", set_value.gui)
+
+    # ---- Image > Overlay ----
     overlayMenu = imageMenu.addMenu("Overlay")
     addAction(overlayMenu, "Background", background.gui)
     addAction(overlayMenu, "Timestamp", time_stamp.gui)
     addAction(overlayMenu, "Scale Bar", scale_bar.gui)
     addAction(overlayMenu, "Track Overlay", lambda: __import__('flika.viewers.track_overlay', fromlist=['show_track_overlay']).show_track_overlay())
 
+    # ---- Process > Binary ----
     binaryMenu = processMenu.addMenu("Binary")
-    mathMenu = processMenu.addMenu("Math")
-    filtersMenu = processMenu.addMenu("Filters")
-    processMenu.addAction(QtWidgets.QAction("Image Calculator", processMenu, triggered=image_calculator.gui))
-
-    colocMenu = processMenu.addMenu("Colocalization")
-    addAction(colocMenu, "Colocalization Analysis", colocalization.gui)
-
     addAction(binaryMenu, "Threshold", threshold.gui)
     addAction(binaryMenu, "Adaptive Threshold", adaptive_threshold.gui)
+    addAction(binaryMenu, "Hysteresis Threshold", hysteresis_threshold.gui)
+    addAction(binaryMenu, "Multi-Otsu Threshold", multi_otsu_threshold.gui)
     addAction(binaryMenu, "Canny Edge Detector", canny_edge_detector.gui)
     binaryMenu.addSeparator()
     addAction(binaryMenu, "Logically Combine", logically_combine.gui)
     addAction(binaryMenu, "Remove Small Blobs", remove_small_blobs.gui)
+    addAction(binaryMenu, "Remove Small Holes", remove_small_holes.gui)
     addAction(binaryMenu, "Binary Erosion", binary_erosion.gui)
     addAction(binaryMenu, "Binary Dilation", binary_dilation.gui)
     addAction(binaryMenu, "Generate ROIs", generate_rois.gui)
     binaryMenu.addSeparator()
-    addAction(binaryMenu, "Analyze Particles", analyze_particles.gui)
+    addAction(binaryMenu, "Grayscale Opening", grayscale_opening.gui)
+    addAction(binaryMenu, "Grayscale Closing", grayscale_closing.gui)
+    addAction(binaryMenu, "Morphological Gradient", morphological_gradient.gui)
+    addAction(binaryMenu, "H-Maxima", h_maxima.gui)
+    addAction(binaryMenu, "H-Minima", h_minima.gui)
+    addAction(binaryMenu, "Area Opening", area_opening.gui)
+    addAction(binaryMenu, "Area Closing", area_closing.gui)
+    addAction(binaryMenu, "Flood Fill", flood_fill_process.gui)
     binaryMenu.addSeparator()
+    addAction(binaryMenu, "Mask Editor", mask_editor.gui)
+    binaryMenu.addSeparator()
+    addAction(binaryMenu, "Analyze Particles", analyze_particles.gui)
     addAction(binaryMenu, "Distance Transform", distance_transform.gui)
     addAction(binaryMenu, "Watershed Segmentation", watershed_segmentation.gui)
 
+    # ---- Process > Math ----
+    mathMenu = processMenu.addMenu("Math")
     addAction(mathMenu, "Multiply", multiply.gui)
     addAction(mathMenu, "Divide", divide.gui)
     addAction(mathMenu, "Subtract", subtract.gui)
@@ -115,6 +144,8 @@ def setup_menus():
     addAction(mathMenu, "Histogram Equalize", histogram_equalize.gui)
     addAction(mathMenu, "Normalize", normalize.gui)
 
+    # ---- Process > Filters ----
+    filtersMenu = processMenu.addMenu("Filters")
     addAction(filtersMenu, "Gaussian Blur", gaussian_blur.gui)
     addAction(filtersMenu, "Difference of Gaussians", difference_of_gaussians.gui)
     filtersMenu.addSeparator()
@@ -127,13 +158,61 @@ def setup_menus():
     addAction(filtersMenu, "Boxcar Differential", boxcar_differential_filter.gui)
     addAction(filtersMenu, "Wavelet Filter", wavelet_filter.gui)
     addAction(filtersMenu, "Bilateral Filter", bilateral_filter.gui)
+    filtersMenu.addSeparator()
+    addAction(filtersMenu, "Sobel", sobel_filter.gui)
+    addAction(filtersMenu, "Laplacian", laplacian_filter.gui)
+    addAction(filtersMenu, "Gaussian Laplace (LoG)", gaussian_laplace_filter.gui)
+    addAction(filtersMenu, "Gaussian Gradient Magnitude", gaussian_gradient_magnitude_filter.gui)
+    filtersMenu.addSeparator()
+    addAction(filtersMenu, "Sato Tubeness", sato_tubeness.gui)
+    addAction(filtersMenu, "Meijering Neuriteness", meijering_neuriteness.gui)
+    addAction(filtersMenu, "Hessian Filter", hessian_filter.gui)
+    addAction(filtersMenu, "Gabor Filter", gabor_filter.gui)
+    filtersMenu.addSeparator()
+    addAction(filtersMenu, "Maximum Filter", maximum_filter.gui)
+    addAction(filtersMenu, "Minimum Filter", minimum_filter.gui)
+    addAction(filtersMenu, "Percentile Filter", percentile_filter.gui)
+    filtersMenu.addSeparator()
+    addAction(filtersMenu, "TV Denoising", tv_denoise.gui)
+    addAction(filtersMenu, "Flash Remover", flash_remover.gui)
 
+    processMenu.addAction(QtWidgets.QAction("Image Calculator", processMenu, triggered=image_calculator.gui))
+
+    # ---- Process > Segmentation ----
+    segMenu = processMenu.addMenu("Segmentation")
+    addAction(segMenu, "Connected Components", connected_components.gui)
+    addAction(segMenu, "Region Properties", region_properties.gui)
+    addAction(segMenu, "Clear Border", clear_border.gui)
+    addAction(segMenu, "Expand Labels", expand_labels.gui)
+    segMenu.addSeparator()
+    addAction(segMenu, "Random Walker", random_walker_seg.gui)
+    addAction(segMenu, "SLIC Superpixels", slic_superpixels.gui)
+    segMenu.addSeparator()
+    addAction(segMenu, "Find Boundaries", find_boundaries.gui)
+    addAction(segMenu, "Find Contours", find_contours_process.gui)
+
+    # ---- Process > Detection ----
+    detectMenu = processMenu.addMenu("Detection")
+    addAction(detectMenu, "Blob Detection (LoG)", blob_detection_log.gui)
+    addAction(detectMenu, "Blob Detection (DoH)", blob_detection_doh.gui)
+    addAction(detectMenu, "Peak Local Max", peak_local_max.gui)
+    addAction(detectMenu, "Template Matching", template_match.gui)
+    addAction(detectMenu, "Local Maxima", local_maxima_detect.gui)
+
+    # ---- Process > Colocalization ----
+    colocMenu = processMenu.addMenu("Colocalization")
+    addAction(colocMenu, "Colocalization Analysis", colocalization.gui)
+
+    # ---- Process > SPT Analysis ----
     sptMenu = processMenu.addMenu("SPT Analysis")
     addAction(sptMenu, "SPT Control Panel", spt_analysis.gui)
     addAction(sptMenu, "Detect Particles", detect_particles.gui)
     addAction(sptMenu, "Link Particles", link_particles_process.gui)
     sptMenu.addSeparator()
     addAction(sptMenu, "Results Table", _show_results_table)
+
+    # ---- Process > Export ----
+    addAction(processMenu, "Export Video", video_exporter.gui)
 
     g.menus.append(imageMenu)
     g.menus.append(processMenu)

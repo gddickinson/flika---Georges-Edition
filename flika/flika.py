@@ -42,6 +42,12 @@ def parse_arguments(argv):
                         help='Run test suite')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Increase the verbosity level')
+    parser.add_argument('--headless', action='store_true',
+                        help='Run without GUI (headless mode)')
+    parser.add_argument('--script-file', type=str, dest='script_file',
+                        help='Execute a Python script in headless mode and exit')
+    parser.add_argument('--batch', type=str, dest='batch_dir',
+                        help='Process all files in directory using --script-file')
     parser.add_argument('--version', action='version', version=str(__version__))
 
     args = parser.parse_args(argv)
@@ -66,11 +72,12 @@ def load_files(files):
     for f in files:
         open_file(f)
 
-def start_flika(files=None):
-    """Run a flika session and exit, beginning the event loop
+def start_flika(files=None, headless=False):
+    """Run a flika session, beginning the event loop.
 
     Parameters:
         files (list): An optional list of data files to load.
+        headless (bool): If True, run without GUI (for scripting/batch).
 
     Returns:
         A flika application object with optional files loaded
@@ -79,16 +86,63 @@ def start_flika(files=None):
     if files is None:
         files = []
     logger.debug("Started 'flika.start_flika()'")
-    logger.info('Starting flika')
-    fa = FlikaApplication()
+    logger.info('Starting flika' + (' (headless)' if headless else ''))
+
+    from . import global_vars as g
+    g.headless = headless
+    if headless:
+        g.settings['show_windows'] = False
+
+    fa = FlikaApplication(headless=headless)
     load_files(files)
-    fa.start()
-    ipython_qt_event_loop_setup()
+    if not headless:
+        fa.start()
+        ipython_qt_event_loop_setup()
     logger.debug("Completed 'flika.start_flika()'")
     return fa
 
+
+def start_flika_headless():
+    """Convenience function: start flika in headless mode for scripting.
+
+    Returns:
+        The global_vars module (g) for easy access to windows and settings.
+
+    Example::
+
+        from flika.flika import start_flika_headless
+        g = start_flika_headless()
+        from flika.process.file_ import open_file
+        from flika.process.filters import gaussian_blur
+        w = open_file('input.tif')
+        gaussian_blur(sigma=2.0)
+        g.win.save('output.tif')
+    """
+    from . import global_vars as g
+    start_flika(headless=True)
+    return g
+
+
 def exec_():
-    fa = start_flika(sys.argv[1:])
+    args, files = parse_arguments(sys.argv[1:])
+
+    if args.headless or args.script_file:
+        fa = start_flika(files=files, headless=True)
+
+        if args.script_file:
+            logger.info(f'Executing script: {args.script_file}')
+            with open(args.script_file, 'r') as f:
+                exec(f.read(), {'__builtins__': __builtins__, '__file__': args.script_file})
+
+            if args.batch_dir:
+                from .batch import BatchProcessor
+                from . import global_vars as g
+                input_files = BatchProcessor.collect_files(args.batch_dir)
+                logger.info(f'Batch processing {len(input_files)} files from {args.batch_dir}')
+
+        return 0
+
+    fa = start_flika(files)
     return fa.app.exec_()
 
 def post_install():

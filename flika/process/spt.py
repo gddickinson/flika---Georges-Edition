@@ -30,7 +30,7 @@ class SPT_Analysis(BaseProcess):
         g.m.addDockWidget(QtCore.Qt.RightDockWidgetArea, panel)
         panel.show()
         panel.raise_()
-        g.m.statusBar().showMessage('SPT Analysis panel opened.')
+        g.status_msg('SPT Analysis panel opened.')
 
 spt_analysis = SPT_Analysis()
 
@@ -135,7 +135,7 @@ class Detect_Particles(BaseProcess):
         w = g.win
         data = w.image
 
-        g.m.statusBar().showMessage(f'Detecting particles ({method})...')
+        g.status_msg(f'Detecting particles ({method})...')
 
         if method == 'U-Track':
             from ..spt.detection.utrack_detector import UTrackDetector
@@ -187,7 +187,7 @@ class Detect_Particles(BaseProcess):
 
         n_detections = len(locs)
         n_frames = len(np.unique(locs[:, 0])) if n_detections > 0 else 0
-        g.m.statusBar().showMessage(
+        g.status_msg(
             f'Detection complete: {n_detections} particles in {n_frames} frames.')
 
         # Display as scatter points on window
@@ -321,7 +321,7 @@ class Link_Particles_Process(BaseProcess):
             g.alert("No localizations found. Run Detect Particles first.")
             return
 
-        g.m.statusBar().showMessage(f'Linking particles ({method})...')
+        g.status_msg(f'Linking particles ({method})...')
 
         if method == 'Greedy':
             from ..spt.linking.greedy_linker import link_particles, tracks_to_dict
@@ -366,7 +366,7 @@ class Link_Particles_Process(BaseProcess):
             pdata.set_tracks(tracks, linking_params={'method': method})
 
         n_tracks = stats.get('num_tracks', len(tracks))
-        g.m.statusBar().showMessage(
+        g.status_msg(
             f'Linking complete: {n_tracks} tracks '
             f'(mean length {stats.get("mean_track_length", 0):.1f}).')
 

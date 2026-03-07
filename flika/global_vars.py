@@ -190,6 +190,19 @@ class SetCurrentWindowSignal(QtWidgets.QWidget):
         self.hide()
 
 
+headless = False  #: bool: True when running in headless mode (no GUI)
+
+
+def status_msg(msg):
+    """Show a message on the main window status bar, if available."""
+    if headless or m is None:
+        return
+    try:
+        m.statusBar().showMessage(msg)
+    except (RuntimeError, AttributeError):
+        pass
+
+
 def alert(msg, title="flika - Alert"):
     """alert(msg, title="flika - Alert')
     Creates a popup that alerts the user.
@@ -200,7 +213,7 @@ def alert(msg, title="flika - Alert"):
     """
 
     logger.info('Alert: ' + msg)
-    if m is None:
+    if headless or m is None:
         return
     msgbx = QtWidgets.QMessageBox(m)
     msgbx.setIcon(QtWidgets.QMessageBox.Information)

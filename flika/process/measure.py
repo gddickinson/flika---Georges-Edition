@@ -176,7 +176,7 @@ class Measure(BaseProcess):
             filename (str): name of file to save
         
         '''
-        g.m.statusBar().showMessage('Saving {}'.format(os.path.basename(filename)))
+        g.status_msg('Saving {}'.format(os.path.basename(filename)))
         d=self.data
         output=''
         maxj=np.max([len(j) for j in d])
@@ -198,7 +198,7 @@ class Measure(BaseProcess):
         f = open(filename, 'w')
         f.write(output)
         f.close()
-        g.m.statusBar().showMessage('Successfully saved {}'.format(os.path.basename(filename)))
+        g.status_msg('Successfully saved {}'.format(os.path.basename(filename)))
     
 measure = Measure()
 logger.debug("Completed 'reading process/measure.py'")

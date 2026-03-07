@@ -12,7 +12,7 @@ from ..utils.ndim import per_plane
 
 
 
-__all__ = ['deinterleave','trim','zproject','image_calculator', 'pixel_binning', 'frame_binning', 'resize', 'concatenate_stacks', 'duplicate', 'generate_random_image', 'generate_phantom_volume', 'change_datatype', 'shear_transform', 'motion_correction']
+__all__ = ['deinterleave','trim','zproject','image_calculator', 'pixel_binning', 'frame_binning', 'resize', 'concatenate_stacks', 'duplicate', 'generate_random_image', 'generate_phantom_volume', 'change_datatype', 'shear_transform', 'motion_correction', 'frame_remover']
 
 def duplicate():
     old = g.win
@@ -302,7 +302,7 @@ class Deinterleave(BaseProcess):
         
         if keepSourceWindow is False:
             self.oldwindow.close()  
-        g.m.statusBar().showMessage('Finished with {}.'.format(self.__name__))
+        g.status_msg('Finished with {}.'.format(self.__name__))
         return newWindows
 deinterleave=Deinterleave()
 
@@ -561,7 +561,7 @@ class ZProject(BaseProcess):
     def __call__(self, firstFrame, lastFrame, projection_type, keepSourceWindow=False):
         self.start(keepSourceWindow)
         if self.tif.ndim < 3:
-            g.m.statusBar().showMessage('zproject requires at least 3 dimensional windows')
+            g.status_msg('zproject requires at least 3 dimensional windows')
             return False
         self.newtif=self.tif[firstFrame:lastFrame+1]
         p=projection_type
@@ -608,7 +608,7 @@ class Image_calculator(BaseProcess):
         super().gui()
     def __call__(self,window1, window2, operation, keepSourceWindow=False):
         self.keepSourceWindow=keepSourceWindow
-        g.m.statusBar().showMessage('Performing {}...'.format(self.__name__))
+        g.status_msg('Performing {}...'.format(self.__name__))
         if window1 is None or window2 is None:
             g.alert("You cannot execute '{}' without selecting a window first.".format(self.__name__))
             return None
@@ -669,7 +669,7 @@ class Image_calculator(BaseProcess):
             logger.debug('closing both windows')
             window1.close()
             window2.close()
-        g.m.statusBar().showMessage('Finished with {}.'.format(self.__name__))
+        g.status_msg('Finished with {}.'.format(self.__name__))
         newWindow=Window(self.newtif,str(self.newname),self.oldwindow.filename)
         del self.newtif
         return newWindow
@@ -702,7 +702,7 @@ class Concatenate_stacks(BaseProcess):
 
     def __call__(self, window1, window2, keepSourceWindow=False):
         self.keepSourceWindow = keepSourceWindow
-        g.m.statusBar().showMessage('Performing {}...'.format(self.__name__))
+        g.status_msg('Performing {}...'.format(self.__name__))
         if window1 is None or window2 is None:
             raise (
             MissingWindowError("You cannot execute '{}' without selecting a window first.".format(self.__name__)))
@@ -722,7 +722,7 @@ class Concatenate_stacks(BaseProcess):
             logger.debug('closing both windows')
             window1.close()
             window2.close()
-        g.m.statusBar().showMessage('Finished with {}.'.format(self.__name__))
+        g.status_msg('Finished with {}.'.format(self.__name__))
         newWindow = Window(self.newtif, str(self.newname), self.oldwindow.filename)
         del self.newtif
         return newWindow
@@ -925,7 +925,7 @@ class Shear_Transform(BaseProcess):
                 list(executor.map(shear_frame, range(mt)))
         else:
             for t in range(mt):
-                g.m.statusBar().showMessage(f'Shearing frame {t + 1}/{mt}')
+                g.status_msg(f'Shearing frame {t + 1}/{mt}')
                 shear_frame(t)
 
         # Reorder back to (T, X, Y, Z)
@@ -995,7 +995,7 @@ class Motion_Correction(BaseProcess):
                 corrected[i] = r
         else:
             for i in range(tif.shape[0]):
-                g.m.statusBar().showMessage(f'Correcting frame {i + 1}/{tif.shape[0]}')
+                g.status_msg(f'Correcting frame {i + 1}/{tif.shape[0]}')
                 corrected[i] = correct_frame(i)
 
         self.newtif = corrected
@@ -1004,6 +1004,70 @@ class Motion_Correction(BaseProcess):
 
 
 motion_correction = Motion_Correction()
+
+
+class Frame_Remover(BaseProcess):
+    """frame_remover(start, end, interval, length, keepSourceWindow=False)
+
+    Removes frames from a stack at regular intervals.
+
+    Parameters:
+        start (int): First frame index to consider for removal.
+        end (int): Last frame index to consider.
+        interval (int): Spacing between removal blocks.
+        length (int): Number of consecutive frames to remove per block.
+    Returns:
+        newWindow
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def get_init_settings_dict(self):
+        return {'start': 0, 'end': 0, 'interval': 10, 'length': 1}
+
+    def gui(self):
+        self.gui_reset()
+        nFrames = 1
+        if g.win is not None and g.win.image.ndim >= 3:
+            nFrames = g.win.image.shape[0]
+        start = SliderLabel(0)
+        start.setRange(0, max(0, nFrames - 1))
+        start.setValue(0)
+        end = SliderLabel(0)
+        end.setRange(0, max(0, nFrames - 1))
+        end.setValue(max(0, nFrames - 1))
+        interval = SliderLabel(0)
+        interval.setRange(1, max(1, nFrames))
+        interval.setValue(10)
+        length = SliderLabel(0)
+        length.setRange(1, max(1, nFrames))
+        length.setValue(1)
+        self.items.append({'name': 'start', 'string': 'Start Frame', 'object': start})
+        self.items.append({'name': 'end', 'string': 'End Frame', 'object': end})
+        self.items.append({'name': 'interval', 'string': 'Interval', 'object': interval})
+        self.items.append({'name': 'length', 'string': 'Frames to Remove', 'object': length})
+        super().gui()
+
+    def __call__(self, start, end, interval, length, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        if self.tif.ndim < 3:
+            g.alert('Frame remover requires at least 3D data')
+            return None
+        start_indices = np.arange(start, end + 1, interval)
+        to_delete = []
+        for i in start_indices:
+            to_delete.extend(range(i, min(i + length, self.tif.shape[0])))
+        to_delete = sorted(set(to_delete))
+        if len(to_delete) == 0:
+            g.alert('No frames selected for removal')
+            return None
+        self.newtif = np.delete(self.tif, to_delete, axis=0)
+        self.newname = self.oldname + ' - {} frames removed'.format(len(to_delete))
+        return self.end()
+
+
+frame_remover = Frame_Remover()
 
 
 logger.debug("Completed 'reading process/stacks.py'")

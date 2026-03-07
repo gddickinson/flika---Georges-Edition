@@ -10,7 +10,7 @@ from ..utils.ndim import per_plane
 from scipy.ndimage import uniform_filter1d, median_filter as nd_median_filter
 from scipy.fft import fft as sp_fft, ifft as sp_ifft, fftfreq as sp_fftfreq
 
-__all__ = ['gaussian_blur', 'difference_of_gaussians', 'mean_filter', 'variance_filter', 'median_filter', 'butterworth_filter', 'boxcar_differential_filter','wavelet_filter','difference_filter', 'fourier_filter', 'bilateral_filter']
+__all__ = ['gaussian_blur', 'difference_of_gaussians', 'mean_filter', 'variance_filter', 'median_filter', 'butterworth_filter', 'boxcar_differential_filter','wavelet_filter','difference_filter', 'fourier_filter', 'bilateral_filter', 'sobel_filter', 'laplacian_filter', 'gaussian_laplace_filter', 'gaussian_gradient_magnitude_filter', 'sato_tubeness', 'meijering_neuriteness', 'hessian_filter', 'gabor_filter', 'maximum_filter', 'minimum_filter', 'percentile_filter', 'tv_denoise', 'flash_remover']
 ###############################################################################
 ##################   SPATIAL FILTERS       ####################################
 ###############################################################################
@@ -1093,7 +1093,941 @@ def bilateral_smooth(soft,beta,width,stoptol,maxiter,y):
 bilateral_filter=Bilateral_filter()
 
 
+###############################################################################
+##################   EDGE / GRADIENT FILTERS   ################################
+###############################################################################
+from scipy.ndimage import gaussian_laplace, gaussian_gradient_magnitude
+from scipy.ndimage import maximum_filter as nd_maximum_filter
+from scipy.ndimage import minimum_filter as nd_minimum_filter
+from scipy.ndimage import percentile_filter as nd_percentile_filter
+import skimage.restoration
 
+
+@per_plane
+def _sobel_impl(tif):
+    if tif.ndim == 2:
+        return skimage.filters.sobel(tif.astype(np.float64))
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = skimage.filters.sobel(tif[i].astype(np.float64))
+        return result
+
+
+class Sobel_Filter(BaseProcess):
+    """ sobel_filter(keepSourceWindow=False)
+
+    Applies a Sobel edge detection filter to every frame of your stack.
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _sobel_impl(self.tif)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Sobel Filter'
+        return self.end()
+
+    def preview(self):
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            testimage = skimage.filters.sobel(testimage)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+sobel_filter = Sobel_Filter()
+
+
+@per_plane
+def _laplacian_impl(tif, ksize):
+    if tif.ndim == 2:
+        return skimage.filters.laplace(tif.astype(np.float64), ksize=ksize)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = skimage.filters.laplace(tif[i].astype(np.float64), ksize=ksize)
+        return result
+
+
+class Laplacian_Filter(BaseProcess):
+    """ laplacian_filter(ksize, keepSourceWindow=False)
+
+    Applies a Laplacian filter to every frame of your stack.
+
+    Args:
+        ksize (int): Size of the discrete Laplacian operator (must be odd)
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        ksize = SliderLabelOdd()
+        ksize.setRange(3, 15)
+        ksize.setValue(3)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'ksize', 'string': 'Kernel Size', 'object': ksize})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, ksize=3, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _laplacian_impl(self.tif, ksize)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Laplacian ksize=' + str(ksize)
+        return self.end()
+
+    def preview(self):
+        ksize = self.getValue('ksize')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            testimage = skimage.filters.laplace(testimage, ksize=ksize)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+laplacian_filter = Laplacian_Filter()
+
+
+@per_plane
+def _gaussian_laplace_impl(tif, sigma):
+    if tif.ndim == 2:
+        return gaussian_laplace(tif.astype(np.float64), sigma=sigma)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = gaussian_laplace(tif[i].astype(np.float64), sigma=sigma)
+        return result
+
+
+class Gaussian_Laplace_Filter(BaseProcess):
+    """ gaussian_laplace_filter(sigma, keepSourceWindow=False)
+
+    Applies a Laplacian of Gaussian (LoG) filter to every frame of your stack.
+
+    Args:
+        sigma (float): Standard deviation of the Gaussian
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        sigma = SliderLabel(2)
+        sigma.setRange(0.5, 50)
+        sigma.setValue(1)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'sigma', 'string': 'Sigma (pixels)', 'object': sigma})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, sigma, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _gaussian_laplace_impl(self.tif, sigma)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Gaussian Laplace sigma=' + str(sigma)
+        return self.end()
+
+    def preview(self):
+        sigma = self.getValue('sigma')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            testimage = gaussian_laplace(testimage, sigma=sigma)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+gaussian_laplace_filter = Gaussian_Laplace_Filter()
+
+
+@per_plane
+def _gaussian_gradient_magnitude_impl(tif, sigma):
+    if tif.ndim == 2:
+        return gaussian_gradient_magnitude(tif.astype(np.float64), sigma=sigma)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = gaussian_gradient_magnitude(tif[i].astype(np.float64), sigma=sigma)
+        return result
+
+
+class Gaussian_Gradient_Magnitude(BaseProcess):
+    """ gaussian_gradient_magnitude_filter(sigma, keepSourceWindow=False)
+
+    Applies a Gaussian gradient magnitude filter to every frame of your stack.
+
+    Args:
+        sigma (float): Standard deviation of the Gaussian
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        sigma = SliderLabel(2)
+        sigma.setRange(0.5, 50)
+        sigma.setValue(1)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'sigma', 'string': 'Sigma (pixels)', 'object': sigma})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, sigma, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _gaussian_gradient_magnitude_impl(self.tif, sigma)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Gaussian Gradient Magnitude sigma=' + str(sigma)
+        return self.end()
+
+    def preview(self):
+        sigma = self.getValue('sigma')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            testimage = gaussian_gradient_magnitude(testimage, sigma=sigma)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+gaussian_gradient_magnitude_filter = Gaussian_Gradient_Magnitude()
+
+
+###############################################################################
+##################   RIDGE / TUBENESS FILTERS   ###############################
+###############################################################################
+
+
+@per_plane
+def _sato_impl(tif, sigma_min, sigma_max, black_ridges):
+    sigmas = np.linspace(sigma_min, sigma_max, max(int(sigma_max - sigma_min) + 1, 2))
+    if tif.ndim == 2:
+        return skimage.filters.sato(tif.astype(np.float64), sigmas=sigmas, black_ridges=black_ridges)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = skimage.filters.sato(tif[i].astype(np.float64), sigmas=sigmas, black_ridges=black_ridges)
+        return result
+
+
+class Sato_Tubeness(BaseProcess):
+    """ sato_tubeness(sigma_min, sigma_max, black_ridges, keepSourceWindow=False)
+
+    Applies the Sato tubeness filter for detecting tube-like structures.
+
+    Args:
+        sigma_min (float): Minimum sigma for the range of scales
+        sigma_max (float): Maximum sigma for the range of scales
+        black_ridges (bool): If True, detect black ridges; otherwise white ridges
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        sigma_min = SliderLabel(2)
+        sigma_min.setRange(0.5, 50)
+        sigma_min.setValue(1)
+        sigma_max = SliderLabel(2)
+        sigma_max.setRange(0.5, 50)
+        sigma_max.setValue(5)
+        black_ridges = CheckBox()
+        black_ridges.setChecked(False)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'sigma_min', 'string': 'Sigma Min', 'object': sigma_min})
+        self.items.append({'name': 'sigma_max', 'string': 'Sigma Max', 'object': sigma_max})
+        self.items.append({'name': 'black_ridges', 'string': 'Black Ridges', 'object': black_ridges})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, sigma_min, sigma_max, black_ridges=False, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _sato_impl(self.tif, sigma_min, sigma_max, black_ridges)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Sato Tubeness'
+        return self.end()
+
+    def preview(self):
+        sigma_min = self.getValue('sigma_min')
+        sigma_max = self.getValue('sigma_max')
+        black_ridges = self.getValue('black_ridges')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            sigmas = np.linspace(sigma_min, sigma_max, max(int(sigma_max - sigma_min) + 1, 2))
+            testimage = skimage.filters.sato(testimage, sigmas=sigmas, black_ridges=black_ridges)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+sato_tubeness = Sato_Tubeness()
+
+
+@per_plane
+def _meijering_impl(tif, sigma_min, sigma_max, black_ridges):
+    sigmas = np.linspace(sigma_min, sigma_max, max(int(sigma_max - sigma_min) + 1, 2))
+    if tif.ndim == 2:
+        return skimage.filters.meijering(tif.astype(np.float64), sigmas=sigmas, black_ridges=black_ridges)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = skimage.filters.meijering(tif[i].astype(np.float64), sigmas=sigmas, black_ridges=black_ridges)
+        return result
+
+
+class Meijering_Neuriteness(BaseProcess):
+    """ meijering_neuriteness(sigma_min, sigma_max, black_ridges, keepSourceWindow=False)
+
+    Applies the Meijering neuriteness filter for detecting neurite-like structures.
+
+    Args:
+        sigma_min (float): Minimum sigma for the range of scales
+        sigma_max (float): Maximum sigma for the range of scales
+        black_ridges (bool): If True, detect black ridges; otherwise white ridges
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        sigma_min = SliderLabel(2)
+        sigma_min.setRange(0.5, 50)
+        sigma_min.setValue(1)
+        sigma_max = SliderLabel(2)
+        sigma_max.setRange(0.5, 50)
+        sigma_max.setValue(5)
+        black_ridges = CheckBox()
+        black_ridges.setChecked(False)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'sigma_min', 'string': 'Sigma Min', 'object': sigma_min})
+        self.items.append({'name': 'sigma_max', 'string': 'Sigma Max', 'object': sigma_max})
+        self.items.append({'name': 'black_ridges', 'string': 'Black Ridges', 'object': black_ridges})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, sigma_min, sigma_max, black_ridges=False, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _meijering_impl(self.tif, sigma_min, sigma_max, black_ridges)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Meijering Neuriteness'
+        return self.end()
+
+    def preview(self):
+        sigma_min = self.getValue('sigma_min')
+        sigma_max = self.getValue('sigma_max')
+        black_ridges = self.getValue('black_ridges')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            sigmas = np.linspace(sigma_min, sigma_max, max(int(sigma_max - sigma_min) + 1, 2))
+            testimage = skimage.filters.meijering(testimage, sigmas=sigmas, black_ridges=black_ridges)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+meijering_neuriteness = Meijering_Neuriteness()
+
+
+@per_plane
+def _hessian_impl(tif, sigma_min, sigma_max, black_ridges):
+    sigmas = np.linspace(sigma_min, sigma_max, max(int(sigma_max - sigma_min) + 1, 2))
+    if tif.ndim == 2:
+        return skimage.filters.hessian(tif.astype(np.float64), sigmas=sigmas, black_ridges=black_ridges)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = skimage.filters.hessian(tif[i].astype(np.float64), sigmas=sigmas, black_ridges=black_ridges)
+        return result
+
+
+class Hessian_Filter(BaseProcess):
+    """ hessian_filter(sigma_min, sigma_max, black_ridges, keepSourceWindow=False)
+
+    Applies the Hessian filter for detecting ridge-like structures.
+
+    Args:
+        sigma_min (float): Minimum sigma for the range of scales
+        sigma_max (float): Maximum sigma for the range of scales
+        black_ridges (bool): If True, detect black ridges; otherwise white ridges
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        sigma_min = SliderLabel(2)
+        sigma_min.setRange(0.5, 50)
+        sigma_min.setValue(1)
+        sigma_max = SliderLabel(2)
+        sigma_max.setRange(0.5, 50)
+        sigma_max.setValue(5)
+        black_ridges = CheckBox()
+        black_ridges.setChecked(False)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'sigma_min', 'string': 'Sigma Min', 'object': sigma_min})
+        self.items.append({'name': 'sigma_max', 'string': 'Sigma Max', 'object': sigma_max})
+        self.items.append({'name': 'black_ridges', 'string': 'Black Ridges', 'object': black_ridges})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, sigma_min, sigma_max, black_ridges=False, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _hessian_impl(self.tif, sigma_min, sigma_max, black_ridges)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Hessian Filter'
+        return self.end()
+
+    def preview(self):
+        sigma_min = self.getValue('sigma_min')
+        sigma_max = self.getValue('sigma_max')
+        black_ridges = self.getValue('black_ridges')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            sigmas = np.linspace(sigma_min, sigma_max, max(int(sigma_max - sigma_min) + 1, 2))
+            testimage = skimage.filters.hessian(testimage, sigmas=sigmas, black_ridges=black_ridges)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+hessian_filter = Hessian_Filter()
+
+
+###############################################################################
+##################   GABOR FILTER   ###########################################
+###############################################################################
+
+
+@per_plane
+def _gabor_impl(tif, frequency, theta):
+    if tif.ndim == 2:
+        real, _ = skimage.filters.gabor(tif.astype(np.float64), frequency=frequency, theta=theta)
+        return real
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            real, _ = skimage.filters.gabor(tif[i].astype(np.float64), frequency=frequency, theta=theta)
+            result[i] = real
+        return result
+
+
+class Gabor_Filter(BaseProcess):
+    """ gabor_filter(frequency, theta, keepSourceWindow=False)
+
+    Applies a Gabor filter to every frame of your stack. Returns the real component.
+
+    Args:
+        frequency (float): Spatial frequency of the harmonic function (cycles/pixel)
+        theta (float): Orientation of the filter in degrees (converted to radians internally)
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        frequency = SliderLabel(2)
+        frequency.setRange(0.01, 1.0)
+        frequency.setValue(0.1)
+        theta = SliderLabel(2)
+        theta.setRange(0, 180)
+        theta.setValue(0)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'frequency', 'string': 'Frequency (cycles/pixel)', 'object': frequency})
+        self.items.append({'name': 'theta', 'string': 'Theta (degrees)', 'object': theta})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, frequency, theta, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        theta_rad = np.deg2rad(theta)
+        self.newtif = _gabor_impl(self.tif, frequency, theta_rad)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Gabor freq={} theta={}'.format(frequency, theta)
+        return self.end()
+
+    def preview(self):
+        frequency = self.getValue('frequency')
+        theta = self.getValue('theta')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            theta_rad = np.deg2rad(theta)
+            testimage, _ = skimage.filters.gabor(testimage, frequency=frequency, theta=theta_rad)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+gabor_filter = Gabor_Filter()
+
+
+###############################################################################
+##################   MORPHOLOGICAL / RANK FILTERS   ###########################
+###############################################################################
+
+
+@per_plane
+def _maximum_filter_impl(tif, size):
+    if tif.ndim == 2:
+        return nd_maximum_filter(tif.astype(np.float64), size=size)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = nd_maximum_filter(tif[i].astype(np.float64), size=size)
+        return result
+
+
+class Maximum_Filter(BaseProcess):
+    """ maximum_filter(size, keepSourceWindow=False)
+
+    Applies a spatial maximum filter to every frame of your stack.
+
+    Args:
+        size (int): Size of the filter kernel (must be odd)
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        size = SliderLabelOdd()
+        size.setRange(3, 51)
+        size.setValue(3)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'size', 'string': 'Kernel Size', 'object': size})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, size, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _maximum_filter_impl(self.tif, size)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Maximum Filter size=' + str(size)
+        return self.end()
+
+    def preview(self):
+        size = self.getValue('size')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            testimage = nd_maximum_filter(testimage, size=size)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+maximum_filter = Maximum_Filter()
+
+
+@per_plane
+def _minimum_filter_impl(tif, size):
+    if tif.ndim == 2:
+        return nd_minimum_filter(tif.astype(np.float64), size=size)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = nd_minimum_filter(tif[i].astype(np.float64), size=size)
+        return result
+
+
+class Minimum_Filter(BaseProcess):
+    """ minimum_filter(size, keepSourceWindow=False)
+
+    Applies a spatial minimum filter to every frame of your stack.
+
+    Args:
+        size (int): Size of the filter kernel (must be odd)
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        size = SliderLabelOdd()
+        size.setRange(3, 51)
+        size.setValue(3)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'size', 'string': 'Kernel Size', 'object': size})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, size, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _minimum_filter_impl(self.tif, size)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Minimum Filter size=' + str(size)
+        return self.end()
+
+    def preview(self):
+        size = self.getValue('size')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            testimage = nd_minimum_filter(testimage, size=size)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+minimum_filter = Minimum_Filter()
+
+
+@per_plane
+def _percentile_filter_impl(tif, percentile, size):
+    if tif.ndim == 2:
+        return nd_percentile_filter(tif.astype(np.float64), percentile=percentile, size=size)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = nd_percentile_filter(tif[i].astype(np.float64), percentile=percentile, size=size)
+        return result
+
+
+class Percentile_Filter(BaseProcess):
+    """ percentile_filter(percentile, size, keepSourceWindow=False)
+
+    Applies a spatial percentile filter to every frame of your stack.
+
+    Args:
+        percentile (float): The percentile to compute (0-100)
+        size (int): Size of the filter kernel (must be odd)
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        percentile = SliderLabel(2)
+        percentile.setRange(0, 100)
+        percentile.setValue(50)
+        size = SliderLabelOdd()
+        size.setRange(3, 51)
+        size.setValue(3)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'percentile', 'string': 'Percentile', 'object': percentile})
+        self.items.append({'name': 'size', 'string': 'Kernel Size', 'object': size})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, percentile, size, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _percentile_filter_impl(self.tif, percentile, size)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Percentile Filter p={} size={}'.format(percentile, size)
+        return self.end()
+
+    def preview(self):
+        percentile = self.getValue('percentile')
+        size = self.getValue('size')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            testimage = nd_percentile_filter(testimage, percentile=percentile, size=size)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+percentile_filter = Percentile_Filter()
+
+
+###############################################################################
+##################   DENOISING FILTERS   ######################################
+###############################################################################
+
+
+@per_plane
+def _tv_denoise_impl(tif, weight):
+    if tif.ndim == 2:
+        return skimage.restoration.denoise_tv_chambolle(tif.astype(np.float64), weight=weight)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = skimage.restoration.denoise_tv_chambolle(tif[i].astype(np.float64), weight=weight)
+        return result
+
+
+class TV_Denoise(BaseProcess):
+    """ tv_denoise(weight, keepSourceWindow=False)
+
+    Applies Total Variation denoising (Chambolle) to every frame of your stack.
+
+    Args:
+        weight (float): Denoising weight. Higher values remove more noise but also more detail.
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        weight = SliderLabel(2)
+        weight.setRange(0.01, 1.0)
+        weight.setValue(0.1)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({'name': 'weight', 'string': 'Weight', 'object': weight})
+        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
+        super().gui()
+        self.preview()
+
+    def __call__(self, weight, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        self.newtif = _tv_denoise_impl(self.tif, weight)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - TV Denoise weight=' + str(weight)
+        return self.end()
+
+    def preview(self):
+        weight = self.getValue('weight')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            testimage = skimage.restoration.denoise_tv_chambolle(testimage, weight=weight)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+tv_denoise = TV_Denoise()
+
+
+###############################################################################
+##################   FLASH REMOVER   ##########################################
+###############################################################################
+from ..utils.BaseProcess import ComboBox
+
+
+class Flash_Remover(BaseProcess):
+    """ flash_remover(method, flash_start, flash_end, auto_detect, window_size, keepSourceWindow=False)
+
+    Detects and removes flash artifacts from image stacks.
+
+    Args:
+        method (str): 'Linear Interpolation' or 'Noise Scaling'
+        flash_start (int): First frame of the flash artifact
+        flash_end (int): Last frame of the flash artifact
+        auto_detect (bool): If True, automatically detect flash frames
+        window_size (int): Window size for moving average in auto-detection
+
+    Returns:
+        flika.window.Window
+    """
+    def __init__(self):
+        super().__init__()
+
+    def _auto_detect_flash(self, tif, window_size):
+        """Detect flash frames using moving average on mean frame intensity."""
+        if tif.ndim == 2:
+            return 0, 0
+        mean_intensity = np.mean(tif.reshape(tif.shape[0], -1), axis=1)
+        kernel = np.ones(window_size) / window_size
+        if len(mean_intensity) < window_size:
+            return 0, 0
+        moving_avg = np.convolve(mean_intensity, kernel, mode='same')
+        deviation = mean_intensity - moving_avg
+        threshold = np.std(deviation) * 3
+        flash_frames = np.where(np.abs(deviation) > threshold)[0]
+        if len(flash_frames) == 0:
+            return 0, 0
+        return int(flash_frames[0]), int(flash_frames[-1])
+
+    def _linear_interpolation(self, tif, flash_start, flash_end):
+        """Replace flash frames by linearly interpolating between pre/post flash frames."""
+        result = tif.copy().astype(np.float64)
+        if tif.ndim < 3:
+            return result
+        mt = tif.shape[0]
+        pre_frame = max(0, flash_start - 1)
+        post_frame = min(mt - 1, flash_end + 1)
+        if pre_frame == flash_start and post_frame == flash_end:
+            return result
+        n_flash = flash_end - flash_start + 1
+        for idx, i in enumerate(range(flash_start, flash_end + 1)):
+            alpha = (idx + 1) / (n_flash + 1)
+            result[i] = np.interp(
+                [alpha],
+                [0, 1],
+                [0, 1]
+            )[0] * result[post_frame] + (1 - alpha) * result[pre_frame]
+        return result
+
+    def _noise_scaling(self, tif, flash_start, flash_end, window_size):
+        """Scale flash frames by baseline noise ratio."""
+        result = tif.copy().astype(np.float64)
+        if tif.ndim < 3:
+            return result
+        mt = tif.shape[0]
+        pre_start = max(0, flash_start - window_size)
+        pre_end = flash_start
+        post_start = flash_end + 1
+        post_end = min(mt, flash_end + 1 + window_size)
+        if pre_end > pre_start and post_end > post_start:
+            baseline = np.concatenate([result[pre_start:pre_end], result[post_start:post_end]], axis=0)
+        elif pre_end > pre_start:
+            baseline = result[pre_start:pre_end]
+        elif post_end > post_start:
+            baseline = result[post_start:post_end]
+        else:
+            return result
+        baseline_mean = np.mean(baseline, axis=0)
+        baseline_std = np.std(baseline, axis=0)
+        baseline_std[baseline_std == 0] = 1  # avoid division by zero
+        for i in range(flash_start, flash_end + 1):
+            frame_mean = np.mean(result[i])
+            frame = result[i] - np.mean(result[i])
+            frame_std = np.std(result[i])
+            if frame_std > 0:
+                result[i] = baseline_mean + (frame / frame_std) * baseline_std
+            else:
+                result[i] = baseline_mean
+        return result
+
+    def gui(self):
+        self.gui_reset()
+        method = ComboBox()
+        method.addItem('Linear Interpolation')
+        method.addItem('Noise Scaling')
+        flash_start = SliderLabel(0)
+        flash_start.setRange(0, 10000)
+        flash_start.setValue(0)
+        flash_end = SliderLabel(0)
+        flash_end.setRange(0, 10000)
+        flash_end.setValue(0)
+        auto_detect = CheckBox()
+        auto_detect.setChecked(True)
+        window_size = SliderLabel(0)
+        window_size.setRange(10, 500)
+        window_size.setValue(50)
+        self.items.append({'name': 'method', 'string': 'Method', 'object': method})
+        self.items.append({'name': 'flash_start', 'string': 'Flash Start Frame', 'object': flash_start})
+        self.items.append({'name': 'flash_end', 'string': 'Flash End Frame', 'object': flash_end})
+        self.items.append({'name': 'auto_detect', 'string': 'Auto Detect', 'object': auto_detect})
+        self.items.append({'name': 'window_size', 'string': 'Window Size', 'object': window_size})
+        super().gui()
+
+    def __call__(self, method='Linear Interpolation', flash_start=0, flash_end=0, auto_detect=True, window_size=50, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        if self.tif.ndim < 3:
+            g.alert("Flash Remover requires at least 3-dimensional movies.")
+            return
+        if auto_detect:
+            flash_start, flash_end = self._auto_detect_flash(self.tif, window_size)
+            if flash_start == 0 and flash_end == 0:
+                g.alert("No flash artifact detected.")
+                return
+        if flash_start > flash_end:
+            g.alert("Flash start must be <= flash end.")
+            return
+        if method == 'Linear Interpolation':
+            self.newtif = self._linear_interpolation(self.tif, flash_start, flash_end)
+        elif method == 'Noise Scaling':
+            self.newtif = self._noise_scaling(self.tif, flash_start, flash_end, window_size)
+        else:
+            self.newtif = self.tif
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        self.newname = self.oldname + ' - Flash Removed ({})'.format(method)
+        return self.end()
+
+flash_remover = Flash_Remover()
 
 
 
