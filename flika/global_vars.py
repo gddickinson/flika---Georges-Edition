@@ -26,6 +26,17 @@ from .utils.misc import get_location
 
 __all__ = ['m', 'Settings', 'menus', 'alert', 'windows', 'traceWindows', 'currentWindow', 'win', 'currentTrace', 'clipboard']
 
+
+def _apply_debug_mode(enabled):
+    """Set the flika logger level based on debug_mode setting."""
+    import logging
+    level = logging.DEBUG if enabled else logging.WARNING
+    logger.setLevel(level)
+    for handler in logger.handlers:
+        handler.setLevel(level)
+    if enabled:
+        logger.debug("Debug mode enabled — logger set to DEBUG level")
+
 class Settings(MutableMapping): #http://stackoverflow.com/questions/3387691/python-how-to-perfectly-override-a-dict
     """
     All of flika's settings are stored in this object, which is designed to act like a dictionary. When any value in
@@ -141,6 +152,9 @@ class Settings(MutableMapping): #http://stackoverflow.com/questions/3387691/pyth
             logger.info(msg)
             self.save()
         self.d['mousemode'] = 'rectangle'  # don't change initial mousemode
+        # Apply debug mode to logger if previously enabled
+        if self.d.get('debug_mode', False):
+            _apply_debug_mode(True)
         self._load_user_information()
 
     def _load_user_information(self):

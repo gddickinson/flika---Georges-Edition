@@ -77,6 +77,16 @@ def save_file(filename=None):
             g.alert(f"Cannot save to '{ext}' format: {e}")
             return None
     g.status_msg(f'Successfully saved {os.path.basename(filename)}')
+
+    # Auto-export provenance sidecar if enabled
+    if g.settings.get('auto_export_provenance', False):
+        try:
+            from ..utils.provenance import export_provenance
+            prov_path = os.path.splitext(filename)[0] + '.provenance.json'
+            export_provenance(g.win, prov_path)
+        except Exception as e:
+            logger.warning("Auto provenance export failed: %s", e)
+
     return filename
 
 def save_points(filename=None):

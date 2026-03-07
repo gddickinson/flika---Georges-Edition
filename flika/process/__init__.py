@@ -22,6 +22,7 @@ from .kymograph import *
 from .mask_editor import *
 from .export import *
 from .linescan import *
+from .background_sub import *
 
 def _show_results_table():
     """Open the SPT Results Table dock widget from the menu."""
@@ -177,6 +178,7 @@ def setup_menus():
     addAction(filtersMenu, "Flash Remover", flash_remover.gui)
 
     processMenu.addAction(QtWidgets.QAction("Image Calculator", processMenu, triggered=image_calculator.gui))
+    addAction(processMenu, "Background Subtraction", background_subtract.gui)
 
     # ---- Process > Segmentation ----
     segMenu = processMenu.addMenu("Segmentation")

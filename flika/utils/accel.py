@@ -221,5 +221,15 @@ def should_use_gpu(arr, min_bytes: int = 10 * 1024 * 1024) -> bool:
     if arr.nbytes < min_bytes:
         return False
 
+    # Respect gpu_memory_limit setting (in MB, 0 = no limit)
+    try:
+        mem_limit_mb = g.settings.get('gpu_memory_limit', 0) or 0
+        if mem_limit_mb > 0:
+            arr_mb = arr.nbytes / (1024 * 1024)
+            if arr_mb > mem_limit_mb:
+                return False
+    except Exception:
+        pass
+
     info = detect_devices()
     return any(d.usable and d.backend != 'cpu' for d in info.devices)

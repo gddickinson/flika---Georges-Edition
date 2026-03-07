@@ -210,8 +210,12 @@ class SettingsEditor(BaseDialog):
         frame_interval.setSuffix(" s")
         frame_interval.setValue(g.settings.get('frame_interval', 0.05) or 0.05)
 
+        auto_provenance = QtWidgets.QCheckBox()
+        auto_provenance.setChecked(g.settings.get('auto_export_provenance', False))
+
         items.append({'name': 'pixel_size', 'string': 'Default Pixel Size', 'object': pixel_size})
         items.append({'name': 'frame_interval', 'string': 'Default Frame Interval', 'object': frame_interval})
+        items.append({'name': 'auto_export_provenance', 'string': 'Auto-export provenance on save', 'object': auto_provenance})
         items.append({'name': 'anthropic_api_key', 'string': 'Anthropic API Key (for AI features)', 'object': api_key_edit})
         items.append({'name': 'api_key_storage', 'string': '', 'object': api_key_storage_label})
         items.append({'name': 'delete_api_key', 'string': '', 'object': delete_key_btn})
@@ -223,6 +227,8 @@ class SettingsEditor(BaseDialog):
             g.settings['multiprocessing']=multiprocessing.isChecked()
             g.settings['nCores']=int(nCores.itemText(nCores.currentIndex()))
             g.settings['debug_mode'] = debug_check.isChecked()
+            from ..global_vars import _apply_debug_mode
+            _apply_debug_mode(debug_check.isChecked())
             if not random_color_check.isChecked() and roi_color.color == 'random':
                 roi_color.color = "#ffff00"
             g.settings['roi_color'] = roi_color.value() if not random_color_check.isChecked() else "random"
@@ -234,6 +240,7 @@ class SettingsEditor(BaseDialog):
             g.settings['gpu_memory_limit'] = gpu_mem_limit.value()
             g.settings['pixel_size'] = pixel_size.value()
             g.settings['frame_interval'] = frame_interval.value()
+            g.settings['auto_export_provenance'] = auto_provenance.isChecked()
             key_text = api_key_edit.text().strip()
             if key_text:
                 set_api_key(key_text)
