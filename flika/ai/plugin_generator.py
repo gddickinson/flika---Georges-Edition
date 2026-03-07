@@ -59,10 +59,13 @@ class PluginGenerator:
                 "Install with:  pip install anthropic  (or  pip install flika[ai])"
             )
         if api_key is None:
-            from .. import global_vars as g
-            api_key = os.environ.get("ANTHROPIC_API_KEY") or g.settings.get("anthropic_api_key")
+            from ..app.settings_editor import get_api_key
+            api_key = get_api_key()
         if not api_key:
-            raise ValueError("No API key found.")
+            raise ValueError(
+                "No API key found.  Set ANTHROPIC_API_KEY environment variable "
+                "or enter your key in Edit > Settings."
+            )
         self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model
 

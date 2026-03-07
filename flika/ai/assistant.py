@@ -6,8 +6,8 @@ executable flika scripts.
 Requires:
     pip install anthropic   (or ``pip install flika[ai]``)
 
-The API key is read from the ``ANTHROPIC_API_KEY`` environment variable or
-from ``g.settings['anthropic_api_key']``.
+The API key is read from the system keyring, the ``ANTHROPIC_API_KEY``
+environment variable, or from Edit > Settings.
 """
 from __future__ import annotations
 
@@ -47,12 +47,12 @@ class FlikaAssistant:
                 "Install with:  pip install anthropic  (or  pip install flika[ai])"
             )
         if api_key is None:
-            from .. import global_vars as g
-            api_key = os.environ.get("ANTHROPIC_API_KEY") or g.settings.get("anthropic_api_key")
+            from ..app.settings_editor import get_api_key
+            api_key = get_api_key()
         if not api_key:
             raise ValueError(
-                "No API key found.  Set ANTHROPIC_API_KEY or add "
-                "'anthropic_api_key' to your flika settings."
+                "No API key found.  Set ANTHROPIC_API_KEY environment variable "
+                "or enter your key in Edit > Settings."
             )
         self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model

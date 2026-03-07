@@ -11,6 +11,90 @@ from .. import global_vars as g
 
 __all__ = ['SettingsEditor', 'rectSettings', 'pointSettings', 'pencilSettings', 'csSettings']
 
+
+# ---------------------------------------------------------------------------
+# Secure API-key storage helpers
+# ---------------------------------------------------------------------------
+_KEYRING_SERVICE = "flika"
+_KEYRING_USERNAME = "anthropic_api_key"
+
+
+def _has_keyring():
+    """Return True if the ``keyring`` package is available."""
+    try:
+        import keyring  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def get_api_key() -> str:
+    """Retrieve the Anthropic API key from the system keyring, then env var.
+
+    Falls back to the (deprecated) plaintext settings.json entry for
+    backward compatibility, and migrates it to the keyring if possible.
+    """
+    import os
+
+    # 1. System keyring (preferred)
+    if _has_keyring():
+        import keyring
+        try:
+            val = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+            if val:
+                return val
+        except Exception:
+            pass
+
+    # 2. Environment variable
+    val = os.environ.get("ANTHROPIC_API_KEY", "")
+    if val:
+        return val
+
+    # 3. Legacy plaintext in settings.json — migrate if keyring available
+    val = g.settings.d.get("anthropic_api_key", "")
+    if val and _has_keyring():
+        try:
+            import keyring
+            keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERNAME, val)
+            del g.settings.d["anthropic_api_key"]
+            g.settings.save()
+            logger.info("Migrated API key from settings.json to system keyring.")
+        except Exception:
+            pass
+    return val or ""
+
+
+def set_api_key(key: str):
+    """Store *key* in the system keyring.  Remove any plaintext copy."""
+    if _has_keyring():
+        import keyring
+        keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERNAME, key)
+    else:
+        # Fallback: store in settings (warn user)
+        g.settings["anthropic_api_key"] = key
+
+    # Always remove plaintext copy from settings.json when keyring is used
+    if _has_keyring() and "anthropic_api_key" in g.settings.d:
+        del g.settings.d["anthropic_api_key"]
+        g.settings.save()
+
+
+def delete_api_key():
+    """Securely remove the API key from all storage locations."""
+    # Remove from keyring
+    if _has_keyring():
+        import keyring
+        try:
+            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+        except Exception:
+            pass  # key may not exist
+
+    # Remove from settings.json
+    if "anthropic_api_key" in g.settings.d:
+        del g.settings.d["anthropic_api_key"]
+        g.settings.save()
+
 data_types = ['uint8', 'uint16', 'uint32', 'uint64', 'int8', 'int16', 'int32', 'int64', 'float16', 'float32', 'float64']
 
 class SettingsEditor(BaseDialog):
@@ -55,9 +139,36 @@ class SettingsEditor(BaseDialog):
         api_key_edit = QtWidgets.QLineEdit()
         api_key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         api_key_edit.setPlaceholderText("sk-ant-...")
-        existing_key = g.settings.d.get('anthropic_api_key', '')
+        existing_key = get_api_key()
         if existing_key:
             api_key_edit.setText(existing_key)
+
+        # Delete API Key button
+        delete_key_btn = QtWidgets.QPushButton("Delete API Key")
+        delete_key_btn.setToolTip("Permanently remove the stored API key from the system keyring and settings")
+        def _on_delete_key():
+            reply = QtWidgets.QMessageBox.question(
+                None, "Delete API Key",
+                "This will permanently remove the Anthropic API key from the "
+                "system keyring and settings file.\n\nContinue?",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                delete_api_key()
+                api_key_edit.clear()
+                QtWidgets.QMessageBox.information(
+                    None, "API Key Deleted",
+                    "The API key has been removed from all storage locations."
+                    + ("\n\nNote: Install the 'keyring' package for secure "
+                       "storage in future." if not _has_keyring() else ""),
+                )
+        delete_key_btn.clicked.connect(_on_delete_key)
+        api_key_storage_label = QtWidgets.QLabel(
+            "Stored in: system keyring" if _has_keyring() else
+            "Stored in: settings.json (install 'keyring' for secure storage)"
+        )
+        api_key_storage_label.setStyleSheet("color: gray; font-size: 11px;")
 
         accel_device = QtWidgets.QComboBox()
         for dev in ['Auto', 'CPU', 'CUDA', 'MPS']:
@@ -102,6 +213,8 @@ class SettingsEditor(BaseDialog):
         items.append({'name': 'pixel_size', 'string': 'Default Pixel Size', 'object': pixel_size})
         items.append({'name': 'frame_interval', 'string': 'Default Frame Interval', 'object': frame_interval})
         items.append({'name': 'anthropic_api_key', 'string': 'Anthropic API Key (for AI features)', 'object': api_key_edit})
+        items.append({'name': 'api_key_storage', 'string': '', 'object': api_key_storage_label})
+        items.append({'name': 'delete_api_key', 'string': '', 'object': delete_key_btn})
 
         def update():
             g.settings['internal_data_type'] = str(dataDrop.currentText())
@@ -123,9 +236,10 @@ class SettingsEditor(BaseDialog):
             g.settings['frame_interval'] = frame_interval.value()
             key_text = api_key_edit.text().strip()
             if key_text:
-                g.settings['anthropic_api_key'] = key_text
-            elif 'anthropic_api_key' in g.settings.d:
-                del g.settings.d['anthropic_api_key']
+                set_api_key(key_text)
+            elif not key_text:
+                # User cleared the field — remove the key
+                delete_api_key()
 
 
         super(SettingsEditor, self).__init__(items, 'flika settings', None)
