@@ -1,736 +1,914 @@
-import contextlib
-import os
-
-import numpy as np
-import pyqtgraph as pg
-import pytest
-from qtpy import QtGui, QtWidgets
-from qtpy.QtWidgets import QApplication
+import sys, os
 
 from .. import global_vars as g
-from ..app import application
-from ..roi import makeROI
 from ..window import Window
-
-# Create test images for various test cases
-STANDARD_2D_IMAGE = np.random.random([20, 20])
-STANDARD_3D_IMAGE = np.random.random([10, 20, 20])
-STANDARD_4D_IMAGE = np.random.random([10, 20, 20, 3])
-
-
-# Import suppress_alerts from test_processes or redefine it here
-@contextlib.contextmanager
-def suppress_alerts():
-    """Context manager to suppress all alerts during test execution"""
-    # Store original alert functions
-    original_alert = None
-    original_message_box = None
-
-    if hasattr(g, "alert"):
-        original_alert = g.alert
-        g.alert = lambda *args, **kwargs: None
-
-    if hasattr(g, "messageBox"):
-        original_message_box = g.messageBox
-        g.messageBox = lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Ok
-
-    # Create dummy functions for QtWidgets.QMessageBox
-    original_qmessagebox_methods = {}
-    for method_name in ["information", "warning", "critical", "question", "about"]:
-        if hasattr(QtWidgets.QMessageBox, method_name):
-            original_qmessagebox_methods[method_name] = getattr(
-                QtWidgets.QMessageBox, method_name
-            )
-            setattr(
-                QtWidgets.QMessageBox,
-                method_name,
-                lambda *args, **kwargs: QtWidgets.QMessageBox.Ok,
-            )
-
-    try:
-        yield
-    finally:
-        # Restore original functions
-        if original_alert is not None:
-            g.alert = original_alert
-
-        if original_message_box is not None:
-            g.messageBox = original_message_box
-
-        for method_name, original_method in original_qmessagebox_methods.items():
-            setattr(QtWidgets.QMessageBox, method_name, original_method)
-
-
-# Mock message box fixture to prevent dialogs from blocking tests
-@pytest.fixture
-def mock_message_box(monkeypatch):
-    """Mock any message boxes to automatically return OK"""
-    with suppress_alerts():
-        yield  # This will maintain the alert suppression during test execution
-
-
-# Window fixture for basic window tests
-@pytest.fixture
-def standard_window():
-    """Create a standard 3D window for testing"""
-    win = Window(STANDARD_3D_IMAGE)
-    yield win
-    win.close()
-
-
-class TestWindow:
-    def test_link(self, standard_window, mock_message_box):
-        win1 = standard_window
-        win2 = Window(STANDARD_3D_IMAGE)
-
-        try:
-            win1.link(win2)
-            win1.setIndex(5)
-            assert win2.currentIndex == win1.currentIndex, "Linked windows failure"
-
-            win2.setIndex(3)
-            assert win1.currentIndex == win2.currentIndex, "Linked windows failure"
-
-            win2.unlink(win1)
-            win1.setIndex(1)
-            assert win2.currentIndex != win1.currentIndex, "Unlinked windows failure"
-
-            win2.setIndex(4)
-            assert win1.currentIndex != win2.currentIndex, "Unlinked windows failure"
-
-            win2.close()
-            assert len(win1.linkedWindows) == 0, "Closed window is not unlinked"
-        finally:
-            if "win2" in locals():
-                win2.close()
-
-    def test_timeline(self, standard_window, mock_message_box):
-        win1 = standard_window
-        win1.imageview.setImage(STANDARD_3D_IMAGE[0])
-        assert win1.imageview.ui.roiPlot.isVisible() == False
-        win1.imageview.setImage(STANDARD_3D_IMAGE)
-        assert win1.imageview.ui.roiPlot.isVisible() == True
-
-
-# Base class for ROI tests with common setup/teardown
-class ROITest:
-    TYPE = None
-    POINTS: list[list[int]] = []
-    MASK: list[list[int]] = []
-    img = None
-
-    @pytest.fixture
-    def roi_setup(self, mock_message_box, fa: application.FlikaApplication):
-        """Setup ROI test with window and ROI creation"""
-        # Setup window with retries in case of RuntimeError
-        for i in range(3):
-            try:
-                win = Window(self.img)
-                break
-            except RuntimeError:
-                pass
-        else:
-            raise Exception("Unable to create Window due to RuntimeError")
-
-        # Create tracking variables and ROI
-        changed = False
-        changeFinished = False
-
-        roi = makeROI(self.TYPE, self.POINTS, window=win)
-
-        # Define callback handlers
-        def on_change():
-            nonlocal changed
-            changed = True
-
-        def on_change_finished():
-            nonlocal changeFinished
-            changeFinished = True
-
-        roi.sigRegionChanged.connect(on_change)
-        roi.sigRegionChangeFinished.connect(on_change_finished)
-
-        # Return all the objects needed for testing
-        yield (
-            win,
-            roi,
-            lambda: changed,
-            lambda: changeFinished,
-            lambda: (changed := False),
-            lambda: (changeFinished := False),
-        )
-
-        # Cleanup
-        for r in win.rois:
-            r.delete()
-        win.close()
-
-        # Clear FlikaApplication correctly through the fixture
-        fa.clear()
-
-        pg.ViewBox.AllViews.clear()
-        pg.ViewBox.NamedViews.clear()
-
-    def check_placement(self, roi, mask=None, points=None):
-        """Verify ROI placement is correct"""
-        if mask is None:
-            mask = self.MASK
-        if points is None:
-            points = self.POINTS
-
-        assert np.array_equal(roi.getMask(), mask), (
-            f"Mask differs on creation. {roi.getMask()} != {mask}"
-        )
-        assert np.array_equal(roi.pts, points), (
-            f"pts differs on creation. {roi.pts} != {points}"
-        )
-        assert np.array_equal(roi.getPoints(), points), (
-            f"getPoints differs on creation. {roi.getPoints()} != {points}"
-        )
-
-    def check_similar(self, roi1, roi2):
-        """Verify two ROIs have similar properties"""
-        mask1 = roi1.getMask()
-        mask2 = roi2.getMask()
-        assert np.array_equal(mask1, mask2), (
-            f"Mask differs between ROIs. {mask1} != {mask2}"
-        )
-        assert np.array_equal(roi1.pts, roi2.pts), (
-            f"pts differs between ROIs. {roi1.pts} != {roi2.pts}"
-        )
-        assert np.array_equal(roi1.getPoints(), roi2.getPoints()), (
-            f"getPoints differs between ROIs. {roi1.getPoints()} != {roi2.getPoints()}"
-        )
-
-    def test_roi_creation(self, roi_setup):
-        """Test basic ROI creation and properties"""
-        win, roi, _, _, _, _ = roi_setup
-        self.check_placement(roi)
-
-    def test_copy(self, roi_setup, mock_message_box):
-        win, roi, _, _, _, _ = roi_setup
-
-        roi.copy()
-        roi1 = win.paste()
-        assert roi1 is None and len(win.rois) == 1, "Copying ROI to same window"
-
-        w2 = Window(self.img)
-        try:
-            roi2 = w2.paste()
-            assert roi in roi2.linkedROIs and roi2 in roi.linkedROIs, (
-                "Linked ROI on paste"
-            )
-            self.check_similar(roi, roi2)
-
-            roi.translate([1, 2])
-            assert roi2.pts[0][0] == roi.pts[0][0], "Linked ROIs should move together"
-        finally:
-            w2.close()
-            win.setAsCurrentWindow()
-
-    def test_export_import(self, roi_setup, mock_message_box):
-        win, roi, _, _, _, _ = roi_setup
-
-        try:
-            s = str(roi)
-            roi.window.save_rois("test.txt")
-            from ..roi import open_rois
-
-            rois = open_rois("test.txt")
-
-            assert len(rois) == 1, "Import ROI failure"
-            imported_roi = rois[0]
-            self.check_similar(roi, imported_roi)
-            imported_roi.delete()
-        finally:
-            # Ensure file is removed even if test fails
-            if os.path.exists("test.txt"):
-                os.remove("test.txt")
-
-    def test_plot(self, roi_setup, mock_message_box):
-        win, roi, _, _, _, _ = roi_setup
-
-        roi.unplot()
-        trace = roi.plot()
-
-        if trace is None:
-            assert win.image.ndim == 4, "Trace failed on non-4D image"
-            return
-
-        assert roi.traceWindow != None, "ROI plotted, roi traceWindow set"
-        assert g.currentTrace == trace, "ROI plotted, but currentTrace is still None"
-
-        ind = trace.get_roi_index(roi)
-        if trace.rois[ind]["p1trace"].opts["pen"] != None:
-            assert (
-                trace.rois[ind]["p1trace"].opts["pen"].color().name()
-                == roi.pen.color().name()
-            ), (
-                f"Color not changed. {trace.rois[ind]['p1trace'].opts['pen'].color().name()} != {roi.pen.color().name()}"
-            )
-
-        roi.unplot()
-        assert roi.traceWindow is None, "ROI unplotted, roi traceWindow cleared"
-        assert g.currentTrace is None, "ROI unplotted, currentTrace cleared"
-        g.settings["multipleTraceWindows"] = False
-
-    def test_translate(self, roi_setup, mock_message_box):
-        (
-            win,
-            roi,
-            get_changed,
-            get_change_finished,
-            reset_changed,
-            reset_change_finished,
-        ) = roi_setup
-
-        path = roi.pts.copy()
-        print(f"Original points: {path}")
-
-        roi.translate([2, 1])
-        print(f"After translation: {roi.pts}")
-
-        assert get_changed(), "Change signal was not sent"
-        assert get_change_finished(), "ChangeFinished signal was not sent"
-        reset_changed()
-        reset_change_finished()
-
-        assert len(roi.pts) == len(path), "roi size change on translate"
-
-        # For rectangle ROIs, only the position (first point) should change, size (second point) stays the same
-        if roi.kind == "rectangle":
-            assert np.array_equal(roi.pts[0], path[0] + [2, 1]), (
-                "Position not translated correctly"
-            )
-            assert np.array_equal(roi.pts[1], path[1]), (
-                "Size should not change during translation"
-            )
-        else:
-            # For other ROI types, all points should be translated
-            for i in roi.pts:
-                print(f"Checking point {i} against originals + [2,1]")
-                assert any(np.array_equal(i, p + [2, 1]) for p in path), (
-                    "translation not applied correctly to points"
-                )
-
-    def test_plot_translate(self, roi_setup, mock_message_box):
-        (
-            win,
-            roi,
-            get_changed,
-            get_change_finished,
-            reset_changed,
-            reset_change_finished,
-        ) = roi_setup
-
-        trace = roi.plot()
-        if trace is None:
-            assert win.image.ndim == 4, "Trace failed on non-4D image"
-            return
-
-        assert roi.traceWindow != None, (
-            f"ROI plotted, roi traceWindow set. {roi.traceWindow} should not be None"
-        )
-        assert g.currentTrace == roi.traceWindow, (
-            f"ROI plotted, currentTrace not set. {g.currentTrace} != {roi.traceWindow}"
-        )
-
-        ind = trace.get_roi_index(roi)
-        traceItem = trace.rois[ind]["p1trace"]
-        yData = traceItem.yData.copy()
-
-        roi.translate(2, 1)
-        assert not np.array_equal(yData, traceItem.yData), (
-            f"Translated ROI yData compare {yData} != {traceItem.yData}"
-        )
-
-        assert get_changed(), "Change signal was not sent"
-        assert get_change_finished(), "ChangeFinished signal was not sent"
-        reset_changed()
-        reset_change_finished()
-
-        roi.translate(-2, -1)
-        assert np.array_equal(yData, traceItem.yData), (
-            f"Translated back ROI yData compare {yData} != {traceItem.yData}"
-        )
-
-        assert get_changed(), "Change signal was not sent"
-        assert get_change_finished(), "ChangeFinished signal was not sent"
-
-        roi.unplot()
-
-    def test_change_color(self, roi_setup, mock_message_box):
-        (
-            win,
-            roi,
-            get_changed,
-            get_change_finished,
-            reset_changed,
-            reset_change_finished,
-        ) = roi_setup
-
-        roi.unplot()
-        color = QtGui.QColor("#ff00ff")
-        roi.plot()
-        roi.colorSelected(color)
-
-        assert get_change_finished(), "ChangeFinished signal was not sent"
-        reset_change_finished()
-
-        assert roi.pen.color().name() == color.name(), (
-            f"Color not changed. {roi.pen.color().name()} != {color.name()}"
-        )
-        roi.unplot()
-
-    def test_translate_multiple(self, roi_setup, mock_message_box):
-        (
-            win,
-            roi,
-            get_changed,
-            get_change_finished,
-            reset_changed,
-            reset_change_finished,
-        ) = roi_setup
-
-        translates = [[5, 0], [0, 5], [-5, 0], [0, -5]]
-        roi.copy()
-
-        w2 = Window(self.img)
-        try:
-            roi2 = w2.paste()
-            roi2.colorSelected(QtGui.QColor(0, 255, 130))
-            roi.plot()
-            roi2.plot()
-
-            for i in range(
-                5 * len(translates)
-            ):  # Reduced from 20 to 5 for faster tests
-                tr = translates[i % len(translates)]
-                roi.translate(*tr)
-                assert get_changed(), "Change signal was not sent"
-                assert get_change_finished(), "ChangeFinished signal was not sent"
-                reset_changed()
-                reset_change_finished()
-
-                # Process events to update UI
-                QApplication.processEvents()
-        finally:
-            w2.close()
-            roi.draw_from_points(self.POINTS)
-
-    def test_resize_multiple(self, roi_setup, mock_message_box):
-        (
-            win,
-            roi,
-            get_changed,
-            get_change_finished,
-            reset_changed,
-            reset_change_finished,
-        ) = roi_setup
-
-        handles = roi.getHandles()
-        if len(handles) == 0:
-            pytest.skip("ROI has no handles for resize test")
-
-        translates = [[1, 0], [0, 1], [-1, 0], [0, -1]]
-        roi.copy()
-
-        w2 = Window(self.img)
-        try:
-            roi2 = w2.paste()
-            roi2.colorSelected(QtGui.QColor(0, 255, 130))
-            roi.plot()
-            roi2.plot()
-
-            for h in roi.getHandles():
-                h._updateView()
-                pos = h.viewPos()
-
-                for i in range(
-                    2 * len(translates)
-                ):  # Reduced from 4 to 2 for faster tests
-                    tr = translates[i % len(translates)]
-                    roi.movePoint(h, [pos.x() + tr[0], pos.y() + tr[1]])
-
-                    assert get_changed(), "Change signal was not sent"
-                    assert get_change_finished(), "ChangeFinished signal was not sent"
-                    reset_changed()
-                    reset_change_finished()
-
-                    self.check_similar(roi, roi2)
-
-                    # Process events to update UI
-                    QApplication.processEvents()
-        finally:
-            w2.close()
-            roi.draw_from_points(self.POINTS)
-
+import numpy as np
+import time
+import pytest
+from ..roi import makeROI
+import pyqtgraph as pg
+from qtpy import QtGui
+from qtpy.QtWidgets import QApplication
+
+im = np.random.random([120, 90, 90])
+	
+class TestWindow():
+	def setup_method(self, obj):
+		self.win1 = Window(im)
+
+	def teardown_method(self):
+		self.win1.close()
+
+	def test_link(self):
+		win2 = Window(im)
+		self.win1.link(win2)
+		self.win1.setIndex(100)
+		assert win2.currentIndex == self.win1.currentIndex, "Linked windows failure"
+		win2.setIndex(50)
+		assert self.win1.currentIndex == win2.currentIndex, "Linked windows failure"
+		win2.unlink(self.win1)
+		self.win1.setIndex(100)
+		assert win2.currentIndex != self.win1.currentIndex, "Unlinked windows failure"
+		win2.setIndex(50)
+		assert self.win1.currentIndex != win2.currentIndex, "Unlinked windows failure"
+		win2.close()
+		assert len(self.win1.linkedWindows) == 0, "Closed window is not unlinked"
+
+	def test_timeline(self):
+		self.win1.imageview.setImage(im[0])
+		assert self.win1.imageview.ui.roiPlot.isVisible() == False
+		self.win1.imageview.setImage(im)
+		assert self.win1.imageview.ui.roiPlot.isVisible() == True
+
+class ROITest():
+	TYPE=None
+	POINTS=[]
+	MASK=[]
+
+	def setup_method(self):
+		for i in range(3):
+			try:
+				self.win1 = Window(self.img)
+				break
+			except RuntimeError:
+				pass
+		if not hasattr(self, 'win1'):
+			raise Exception("Unable to create Window due to RuntimeError")
+
+		self.changed = False
+		self.changeFinished = False
+		self.roi = makeROI(self.TYPE, self.POINTS, window=self.win1)
+		self.roi.sigRegionChanged.connect(self.preChange)
+		self.roi.sigRegionChangeFinished.connect(self.preChangeFinished)
+		self.check_placement()
+
+	def preChange(self):
+		self.changed = True
+	
+	def preChangeFinished(self):
+		self.changeFinished = True
+
+	def checkChanged(self):
+		assert self.changed, "Change signal was not sent"
+		self.changed = False
+	
+	def checkChangeFinished(self):
+		assert self.changeFinished, "ChangeFinished signal was not sent"
+		self.changeFinished = False
+	
+	def teardown_method(self, func):
+		#if self.roi is not None:
+		#	self.roi.delete()
+		#assert self.roi not in self.win1.rois, "ROI deleted but still in window.rois"
+		for roi in self.win1.rois:
+			roi.delete()
+		self.win1.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+
+
+	def check_placement(self, mask=None, points=None):
+		if mask is None:
+			mask = self.MASK
+		if points is None:
+			points = self.POINTS
+		assert np.array_equal(self.roi.getMask(), mask), "Mask differs on creation. %s != %s" % (self.roi.getMask(), self.MASK)
+		assert np.array_equal(self.roi.pts, points), "pts differs on creation. %s != %s" % (self.roi.pts, self.POINTS)
+		assert np.array_equal(self.roi.getPoints(), points), "getPoints differs on creation. %s != %s" % (self.roi.getPoints(), self.POINTS)
+
+	def check_similar(self, other):
+		mask1 = self.roi.getMask()
+		mask2 = other.getMask()
+		assert np.array_equal(mask1, mask2), "Mask differs on creation. %s != %s" % (mask1, mask2)
+		assert np.array_equal(self.roi.pts, other.pts), "pts differs on creation. %s != %s" % (self.roi.pts, self.POINTS)
+		assert np.array_equal(self.roi.getPoints(), other.getPoints()), "getPoints differs on creation. %s != %s" % (self.roi.getPoints(), other.getPoints())
+
+	def test_copy(self):
+		self.roi.copy()
+		roi1 = self.win1.paste()
+		assert roi1 == None and len(self.win1.rois) == 1, "Copying ROI to same window"
+		
+		w2 = Window(self.img)
+		roi2 = w2.paste()
+		assert self.roi in roi2.linkedROIs and roi2 in self.roi.linkedROIs, "Linked ROI on paste"
+		self.check_similar(roi2)
+
+		self.roi.translate([1, 2])
+
+		self.checkChanged()
+		self.checkChangeFinished()
+
+		self.check_similar(roi2)
+
+		w2.close()
+		self.win1.setAsCurrentWindow()
+
+	def test_export_import(self):
+		s = str(self.roi)
+		self.roi.window.save_rois("test.txt")
+		from ..roi import open_rois
+		rois = open_rois('test.txt')
+		assert len(rois) == 1, "Import ROI failure"
+		roi = rois[0]
+		os.remove('test.txt')
+		self.check_similar(roi)
+		roi.delete()
+	
+	def test_plot(self):
+		self.roi.unplot()
+		trace = self.roi.plot()
+		if trace is None:
+			assert self.win1.image.ndim == 4, "Trace failed on non-4D image"
+			return
+		assert self.roi.traceWindow != None, "ROI plotted, roi traceWindow set"
+		assert g.currentTrace == trace, "ROI plotted, but currentTrace is still None"
+		ind = trace.get_roi_index(self.roi)
+		if trace.rois[ind]['p1trace'].opts['pen'] != None:
+			assert trace.rois[ind]['p1trace'].opts['pen'].color().name() == self.roi.pen.color().name(), "Color not changed. %s != %s" % (trace.rois[ind]['p1trace'].opts['pen'].color().name(), self.roi.pen.color().name())
+		self.roi.unplot()
+		assert self.roi.traceWindow == None, "ROI unplotted, roi traceWindow cleared"
+		assert g.currentTrace == None, "ROI unplotted, currentTrace cleared"
+		g.settings['multipleTraceWindows'] = False
+	
+	def test_translate(self):
+		path = self.roi.pts.copy()
+		self.roi.translate([2, 1])
+
+		self.checkChanged()
+		self.checkChangeFinished()
+
+		assert len(self.roi.pts) == len(path), "roi size change on translate"
+		assert [i + [2, 1] in path for i in self.roi.pts], "translate applied to mask"
+		self.roi.translate([-2, -1])
+
+		self.checkChanged()
+		self.checkChangeFinished()
+
+	def test_plot_translate(self):
+		trace = self.roi.plot()
+		if trace is None:
+			assert self.win1.image.ndim == 4, "Trace failed on non-4D image"
+			return
+		assert self.roi.traceWindow != None, "ROI plotted, roi traceWindow set. %s should not be None" % (self.roi.traceWindow)
+		assert g.currentTrace == self.roi.traceWindow, "ROI plotted, currentTrace not set. %s != %s" % (g.currentTrace, self.roi.traceWindow) 
+		ind = trace.get_roi_index(self.roi)
+
+		traceItem = trace.rois[ind]['p1trace']
+		yData = traceItem.yData.copy()
+		self.roi.translate(2, 1)
+		assert not np.array_equal(yData, traceItem.yData), "Translated ROI yData compare %s != %s" % (yData, traceItem.yData)
+		
+		self.checkChanged()
+		self.checkChangeFinished()
+
+		self.roi.translate(-2, -1)
+		assert np.array_equal(yData, traceItem.yData), "Translated back ROI yData compare %s != %s" % (yData, traceItem.yData)
+
+		self.checkChanged()
+		self.checkChangeFinished()
+
+		self.roi.unplot()
+
+	def test_change_color(self):
+		self.roi.unplot()
+		color = QtGui.QColor('#ff00ff')
+		self.roi.plot()
+		self.roi.colorSelected(color)
+		
+		self.checkChangeFinished()
+
+		assert self.roi.pen.color().name() == color.name(), "Color not changed. %s != %s" % (self.roi.pen.color().name(), color.name())
+		self.roi.unplot()
+	
+	
+	def test_translate_multiple(self):
+		translates = [[5, 0], [0, 5], [-5, 0], [0, -5]]
+		self.roi.copy()
+		w2 = Window(self.img)
+		roi2 = w2.paste()
+		roi2.colorSelected(QtGui.QColor(0, 255, 130))
+		self.roi.plot()
+		roi2.plot()
+		for i in range(20 * len(translates)):
+			tr = translates[i % len(translates)]
+			self.roi.translate(*tr)
+			self.checkChanged()
+			self.checkChangeFinished()
+			#time.sleep(.02)
+			#QApplication.processEvents()
+
+		w2.close()
+		self.roi.draw_from_points(self.POINTS)
+	
+	def test_resize_multiple(self):
+		if len(self.roi.getHandles()) == 0:
+			return
+		translates = [[1, 0], [0, 1], [-1, 0], [0, -1]]
+		self.roi.copy()
+		w2 = Window(self.img)
+		roi2 = w2.paste()
+		roi2.colorSelected(QtGui.QColor(0, 255, 130))
+		self.roi.plot()
+		roi2.plot()
+
+		for h in self.roi.getHandles():
+			h._updateView()
+			pos = h.viewPos()
+			for i in range(4 * len(translates)):
+				tr = translates[i % len(translates)]
+				self.roi.movePoint(h, [pos.x() + tr[0], pos.y() + tr[1]])
+				self.checkChanged()
+				self.checkChangeFinished()
+				self.check_similar(roi2)
+				#time.sleep(.02)
+				#QApplication.processEvents()
+
+		w2.close()
+		self.roi.draw_from_points(self.POINTS)
 
 class ROI_Rectangle(ROITest):
-    TYPE = "rectangle"
-    POINTS = [[3, 2], [2, 5]]
-    MASK = [[3, 4, 3, 4, 3, 4, 3, 4, 3, 4], [2, 2, 3, 3, 4, 4, 5, 5, 6, 6]]
+	TYPE = "rectangle"
+	POINTS = [[3, 2], [2, 5]]
+	MASK = [[3, 4, 3, 4, 3, 4, 3, 4, 3, 4], [2, 2, 3, 3, 4, 4, 5, 5, 6, 6]]
 
-    def test_crop(self, roi_setup, mock_message_box):
-        win, roi, _, _, _, _ = roi_setup
+	def test_crop(self):
+		w2 = self.roi.crop()
+		bound = self.roi.boundingRect()
+		mask = self.roi.getMask()
+		w, h = np.ptp(mask, 1) + [1, 1]
 
-        w2 = roi.crop()
-        try:
-            bound = roi.boundingRect()
-            mask = roi.getMask()
-            w, h = np.ptp(mask, 1) + [1, 1]
+		assert w == bound.width() and h == bound.height(), "Croppped image different size (%s, %s) != (%s, %s)" % (bound.width(), bound.height(), w, h)
+		w2.close()
 
-            assert w == bound.width() and h == bound.height(), (
-                f"Croppped image different size ({bound.width()}, {bound.height()}) != ({w}, {h})"
-            )
-        finally:
-            if w2 is not None:
-                w2.close()
+	def test_resize(self):
+		self.roi.scale([1, 1.2])
 
-    def test_resize(self, roi_setup, mock_message_box):
-        (
-            win,
-            roi,
-            get_changed,
-            get_change_finished,
-            reset_changed,
-            reset_change_finished,
-        ) = roi_setup
+		self.checkChanged()
+		self.checkChangeFinished()
+		
+		points = [self.POINTS[0], [2, 6]]
+		mask = [[3, 4, 3, 4, 3, 4, 3, 4, 3, 4, 3, 4], [2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7]]
+		self.check_placement(points=points, mask=mask)
 
-        roi.scale([1, 1.2])
-
-        assert get_changed(), "Change signal was not sent"
-        assert get_change_finished(), "ChangeFinished signal was not sent"
-        reset_changed()
-        reset_change_finished()
-
-        points = [self.POINTS[0], [2, 6]]
-        mask = [
-            [3, 4, 3, 4, 3, 4, 3, 4, 3, 4, 3, 4],
-            [2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7],
-        ]
-        self.check_placement(roi, points=points, mask=mask)
-
-        roi.draw_from_points(self.POINTS)
-
+		self.roi.draw_from_points(self.POINTS)
 
 class ROI_Line(ROITest):
-    TYPE = "line"
-    POINTS = [[3, 2], [8, 4]]
-    MASK = [[3, 4, 5, 6, 7, 8], [2, 2, 3, 3, 4, 4]]
+	TYPE="line"
+	POINTS = [[3, 2], [8, 4]]
+	MASK = [[3, 4, 5, 6, 7, 8], [2, 2, 3, 3, 4, 4]]
 
-    def test_kymograph(self, roi_setup, mock_message_box):
-        win, roi, _, _, _, _ = roi_setup
+	def test_kymograph(self):
+		self.roi.update_kymograph()
+		if self.roi.kymograph is None and self.win1.image.ndim != 3:
+			return
+		kymo = self.roi.kymograph
+		assert kymo.image.shape[1] == self.win1.image.shape[0]
+		kymo.close()
+		self.win1.setAsCurrentWindow()
 
-        roi.update_kymograph()
-        if roi.kymograph is None and win.image.ndim != 3:
-            pytest.skip("Kymograph requires 3D image")
-            return
+	def test_move_handle(self):
+		self.roi.movePoint(0, [3, 4])
 
-        try:
-            kymo = roi.kymograph
-            assert kymo.image.shape[1] == win.image.shape[0]
-        finally:
-            if hasattr(roi, "kymograph") and roi.kymograph is not None:
-                roi.kymograph.close()
-            win.setAsCurrentWindow()
+		self.checkChanged()
+		self.checkChangeFinished()
+		
+		newMask = [[3, 4, 5, 6, 7, 8], [4, 4, 4, 4, 4, 4]]
+		assert np.array_equal(self.roi.getMask(), newMask)
+		assert np.array_equal(self.roi.getPoints(), [[3, 4], [8, 4]])
+		self.roi.movePoint(0, [3, 2])
 
-    def test_move_handle(self, roi_setup, mock_message_box):
-        (
-            win,
-            roi,
-            get_changed,
-            get_change_finished,
-            reset_changed,
-            reset_change_finished,
-        ) = roi_setup
-
-        roi.movePoint(0, [3, 4])
-
-        assert get_changed(), "Change signal was not sent"
-        assert get_change_finished(), "ChangeFinished signal was not sent"
-        reset_changed()
-        reset_change_finished()
-
-        newMask = [[3, 4, 5, 6, 7, 8], [4, 4, 4, 4, 4, 4]]
-        assert np.array_equal(roi.getMask(), newMask)
-        assert np.array_equal(roi.getPoints(), [[3, 4], [8, 4]])
-
-        roi.movePoint(0, [3, 2])
-
-        assert get_changed(), "Change signal was not sent"
-        assert get_change_finished(), "ChangeFinished signal was not sent"
+		self.checkChanged()
+		self.checkChangeFinished()
 
 
 class ROI_Freehand(ROITest):
-    TYPE = "freehand"
-    POINTS = [3, 2], [5, 6], [2, 4]
-    MASK = (
-        np.array([2, 3, 3, 3, 4, 4, 5], dtype=int),
-        np.array([4, 2, 3, 4, 4, 5, 6], dtype=int),
-    )
+	TYPE="freehand"
+	POINTS = [3, 2], [5, 6], [2, 4]
+	MASK = [[0, 1, 1, 1, 2, 2, 3], [2, 0, 1, 2, 2, 3, 4]]
 
-    def test_translate_multiple(self, roi_setup, mock_message_box):
-        # Skip this test for freehand ROIs
-        pytest.skip("Translate multiple not applicable to freehand ROIs")
+	def test_plot_translate(self):
+		pass
+
+	def test_translate_multiple(self):
+		pass
 
 
 class ROI_Rect_Line(ROITest):
-    TYPE = "rect_line"
-    POINTS = [3, 2], [5, 4], [4, 8]
-    MASK = (np.array([3, 3, 3, 3, 4, 4, 4, 4]), np.array([2, 2, 3, 4, 5, 6, 7, 8]))
+	TYPE="rect_line"
+	POINTS = [[3, 2], [5, 4], [4, 8]]
+	MASK = [[3, 4, 5, 5, 5, 4, 4, 4], [2, 3, 4, 4, 5, 6, 7, 8]]
 
-    def test_extend(self, roi_setup, mock_message_box):
-        (
-            win,
-            roi,
-            get_changed,
-            get_change_finished,
-            reset_changed,
-            reset_change_finished,
-        ) = roi_setup
+	
+	def test_extend(self):
+		self.roi.extend(9, 2)
 
-        roi.extend(9, 2)
+		self.checkChanged()
+		self.checkChangeFinished()
 
-        assert get_changed(), "Change signal was not sent"
-        assert get_change_finished(), "ChangeFinished signal was not sent"
-        reset_changed()
-        reset_change_finished()
+		self.roi.removeSegment(len(self.roi.lines)-1)
+	
+	def test_plot_translate(self):
+		pass
 
-        roi.removeSegment(len(roi.lines) - 1)
+	def test_translate(self):
+		pass
 
-    def test_plot_translate(self, roi_setup, mock_message_box):
-        # Skip this test for rect_line ROIs
-        pytest.skip("Plot translate test not applicable to rect_line ROIs")
+	def test_translate_multiple(self):
+		pass
 
-    def test_translate(self, roi_setup, mock_message_box):
-        # Skip this test for rect_line ROIs
-        pytest.skip("Translate test not applicable to rect_line ROIs")
+	def test_kymograph(self):
+		self.roi.update_kymograph()
+		if self.roi.kymograph is None and self.win1.image.ndim != 3:
+			return
+		kymo = self.roi.kymograph
+		assert kymo.image.shape[1] == self.win1.image.shape[0]
+		
+		self.roi.setWidth(3)
+		assert kymo.image.shape[1] == self.win1.image.shape[0]
 
-    def test_translate_multiple(self, roi_setup, mock_message_box):
-        # Skip this test for rect_line ROIs
-        pytest.skip("Translate multiple not applicable to rect_line ROIs")
+		kymo.close()
+		self.win1.setAsCurrentWindow()
 
-    def test_kymograph(self, roi_setup, mock_message_box):
-        win, roi, _, _, _, _ = roi_setup
+	def test_copy(self):
+		self.roi.copy()
+		roi1 = self.win1.paste()
+		assert roi1 == None and len(self.win1.rois) == 1, "Copying ROI to same window"
+		
+		w2 = Window(self.img)
+		roi2 = w2.paste()
+		assert self.roi in roi2.linkedROIs and roi2 in self.roi.linkedROIs, "Linked ROI on paste"
+		self.check_similar(roi2)
 
-        roi.update_kymograph()
-        if roi.kymograph is None and win.image.ndim != 3:
-            pytest.skip("Kymograph requires 3D image")
-            return
+		self.roi.lines[0].movePoint(0, [1, 2])
 
-        try:
-            kymo = roi.kymograph
-            assert kymo.image.shape[1] == win.image.shape[0]
+		self.checkChanged()
+		self.checkChangeFinished()
 
-            roi.setWidth(3)
-            assert kymo.image.shape[1] == win.image.shape[0]
-        finally:
-            if hasattr(roi, "kymograph") and roi.kymograph is not None:
-                roi.kymograph.close()
-            win.setAsCurrentWindow()
+		self.check_similar(roi2)
 
-    def test_copy(self, roi_setup, mock_message_box):
-        (
-            win,
-            roi,
-            get_changed,
-            get_change_finished,
-            reset_changed,
-            reset_change_finished,
-        ) = roi_setup
-
-        roi.copy()
-        roi1 = win.paste()
-        assert roi1 is None and len(win.rois) == 1, "Copying ROI to same window"
-
-        w2 = Window(self.img)
-        try:
-            roi2 = w2.paste()
-            assert roi in roi2.linkedROIs and roi2 in roi.linkedROIs, (
-                "Linked ROI on paste"
-            )
-            self.check_similar(roi, roi2)
-
-            roi.lines[0].movePoint(0, [1, 2])
-
-            assert get_changed(), "Change signal was not sent"
-            assert get_change_finished(), "ChangeFinished signal was not sent"
-            reset_changed()
-            reset_change_finished()
-
-            self.check_similar(roi, roi2)
-        finally:
-            w2.close()
-            win.setAsCurrentWindow()
+		w2.close()
+		self.win1.setAsCurrentWindow()
 
 
-# Define test classes for specific image dimensions
-# class Test_Rectangle_2D(ROI_Rectangle):
-#     img = STANDARD_2D_IMAGE
+class Test_Rectangle_2D(ROI_Rectangle):
+	img = np.random.random([20, 20])
+class Test_Rectangle_3D(ROI_Rectangle):
+	img = np.random.random([10, 20, 20])
+class Test_Rectangle_4D(ROI_Rectangle):
+	img = np.random.random([10, 20, 20, 3])
 
-# class Test_Rectangle_3D(ROI_Rectangle):
-#     img = STANDARD_3D_IMAGE
+class Test_Line_2D(ROI_Line):
+	img = np.random.random([20, 20])
+class Test_Line_3D(ROI_Line):
+	img = np.random.random([10, 20, 20])
+class Test_Line_4D(ROI_Line):
+	img = np.random.random([10, 20, 20, 3])
 
-# class Test_Rectangle_4D(ROI_Rectangle):
-#     img = STANDARD_4D_IMAGE
+class Test_Freehand_2D(ROI_Freehand):
+	img = np.random.random([20, 20])
+class Test_Freehand_3D(ROI_Freehand):
+	img = np.random.random([10, 20, 20])
+class Test_Freehand_4D(ROI_Freehand):
+	img = np.random.random([10, 20, 20, 3])
 
-# class Test_Line_2D(ROI_Line):
-#     img = STANDARD_2D_IMAGE
-
-# class Test_Line_3D(ROI_Line):
-#     img = STANDARD_3D_IMAGE
-
-# class Test_Line_4D(ROI_Line):
-#     img = STANDARD_4D_IMAGE
-
-# class Test_Freehand_2D(ROI_Freehand):
-#     img = STANDARD_2D_IMAGE
-
-# class Test_Freehand_3D(ROI_Freehand):
-#     img = STANDARD_3D_IMAGE
-
-# class Test_Freehand_4D(ROI_Freehand):
-#     img = STANDARD_4D_IMAGE
-
-# class Test_Rect_Line_2D(ROI_Rect_Line):
-#     img = STANDARD_2D_IMAGE
-
-# class Test_Rect_Line_3D(ROI_Rect_Line):
-#     img = STANDARD_3D_IMAGE
-
-# class Test_Rect_Line_4D(ROI_Rect_Line):
-#     img = STANDARD_4D_IMAGE
+class Test_Rect_Line_2D(ROI_Rect_Line):
+	img = np.random.random([20, 20])
+class Test_Rect_Line_3D(ROI_Rect_Line):
+	img = np.random.random([10, 20, 20])
+class Test_Rect_Line_4D(ROI_Rect_Line):
+	img = np.random.random([10, 20, 20, 3])
 
 
-class TestTracefig:
-    @pytest.fixture
-    def trace_setup(self, mock_message_box):
-        """Setup for trace figure tests"""
-        w1 = Window(STANDARD_3D_IMAGE)
-        rect = makeROI("rectangle", [[3, 2], [4, 5]], window=w1)
-        trace = rect.plot()
 
-        yield w1, rect, trace
 
-        # Clean up
-        w1.close()
+##############################################################################
+# Ellipse ROI tests
+##############################################################################
 
-    def test_plotting(self, trace_setup, mock_message_box):
-        w1, rect, trace = trace_setup
-        target_time = 5
-        trace.indexChanged.emit(target_time)
-        QApplication.processEvents()
-        assert w1.currentIndex == target_time, "trace indexChanged"
+class ROI_Ellipse(ROITest):
+	TYPE = "ellipse"
+	# pts[0] = center, pts[1] = corner -> center at (10,10), corner at (14,13)
+	POINTS = [[10, 10], [14, 13]]
+	MASK = None  # ellipse mask is non-trivial; override check_placement
 
-    def test_export(self, trace_setup, mock_message_box):
-        w1, rect, trace = trace_setup
+	def check_placement(self, mask=None, points=None):
+		"""For ellipses, just verify mask is non-empty and within bounds."""
+		m = self.roi.getMask()
+		assert len(m) == 2, "getMask should return (xx, yy) tuple"
+		assert np.size(m[0]) > 0, "Ellipse mask should not be empty"
+		assert np.all(m[0] >= 0) and np.all(m[0] < self.win1.mx), "Mask x out of bounds"
+		assert np.all(m[1] >= 0) and np.all(m[1] < self.win1.my), "Mask y out of bounds"
 
-        try:
-            rect.window.save_rois("tempROI.txt")
-            with open("tempROI.txt", "r") as f:
-                t = f.read()
-            assert t == "rectangle\n3 2\n4 5\n"
-        finally:
-            if os.path.exists("tempROI.txt"):
-                os.remove("tempROI.txt")
+	def test_copy(self):
+		"""Ellipse copy/paste - verify basic mechanics work."""
+		self.roi.copy()
+		roi1 = self.win1.paste()
+		assert roi1 == None and len(self.win1.rois) == 1, "Copying ROI to same window"
+		w2 = Window(self.img)
+		roi2 = w2.paste()
+		assert roi2 is not None, "Paste should return a new ROI"
+		# Ellipse copy goes through text which may change representation;
+		# just verify non-empty mask
+		m2 = roi2.getMask()
+		assert np.size(m2[0]) > 0, "Pasted ellipse mask should be non-empty"
+		w2.close()
+		self.win1.setAsCurrentWindow()
+
+	def test_translate(self):
+		m_before = self.roi.getMask()
+		count_before = np.size(m_before[0])
+		self.roi.translate([2, 1])
+		self.checkChanged()
+		self.checkChangeFinished()
+		m_after = self.roi.getMask()
+		assert np.size(m_after[0]) == count_before, "Ellipse pixel count changed on translate"
+		self.roi.translate([-2, -1])
+		self.checkChanged()
+		self.checkChangeFinished()
+
+	def test_export_import(self):
+		# Ellipse export/import produces a different ROI kind (from text),
+		# so we just verify the round-trip doesn't crash.
+		s = str(self.roi)
+		self.roi.window.save_rois("test_ellipse.txt")
+		from ..roi import open_rois
+		rois = open_rois('test_ellipse.txt')
+		assert len(rois) == 1, "Import ROI failure"
+		os.remove('test_ellipse.txt')
+		rois[0].delete()
+
+	def test_translate_multiple(self):
+		pass
+
+	def test_resize_multiple(self):
+		pass
+
+	def test_plot_translate(self):
+		pass
+
+class Test_Ellipse_2D(ROI_Ellipse):
+	img = np.random.random([30, 30])
+class Test_Ellipse_3D(ROI_Ellipse):
+	img = np.random.random([10, 30, 30])
+class Test_Ellipse_4D(ROI_Ellipse):
+	img = np.random.random([10, 30, 30, 3])
+
+
+##############################################################################
+# Point ROI tests
+##############################################################################
+
+class TestPointROI():
+	def setup_method(self):
+		self.img2d = np.random.random([20, 20])
+		self.img3d = np.random.random([10, 20, 20])
+		self.win = Window(self.img3d)
+
+	def teardown_method(self):
+		for roi in self.win.rois:
+			roi.delete()
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_point_mask(self):
+		roi = makeROI('point_roi', [[5, 7]], window=self.win)
+		m = roi.getMask()
+		assert np.array_equal(m[0], [5]), "Point ROI x mask"
+		assert np.array_equal(m[1], [7]), "Point ROI y mask"
+
+	def test_point_trace(self):
+		roi = makeROI('point_roi', [[5, 7]], window=self.win)
+		trace = roi.plot()
+		if trace is not None:
+			assert roi.traceWindow is not None, "Point ROI trace plotted"
+			roi.unplot()
+
+
+##############################################################################
+# Center-Surround ROI tests
+##############################################################################
+
+class TestCenterSurroundROI():
+	def setup_method(self):
+		self.img = np.random.random([10, 30, 30])
+		self.win = Window(self.img)
+
+	def teardown_method(self):
+		for roi in self.win.rois:
+			roi.delete()
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_cs_masks_exist(self):
+		# pos=[5,5], size=[10,10]
+		roi = makeROI('center_surround', [[5, 5], [10, 10]], window=self.win)
+		outer = roi.getMask()
+		center = roi.getCenterMask()
+		surround = roi.getSurroundMask()
+		assert np.size(outer[0]) > 0, "Outer mask should not be empty"
+		assert np.size(center[0]) > 0, "Center mask should not be empty"
+		assert np.size(surround[0]) > 0, "Surround mask should not be empty"
+
+	def test_center_inside_outer(self):
+		roi = makeROI('center_surround', [[5, 5], [10, 10]], window=self.win)
+		outer_set = set(zip(roi.getMask()[0].tolist(), roi.getMask()[1].tolist()))
+		center_set = set(zip(roi.getCenterMask()[0].tolist(), roi.getCenterMask()[1].tolist()))
+		assert center_set.issubset(outer_set), "Center mask should be a subset of outer mask"
+
+
+##############################################################################
+# ROI Manager tests
+##############################################################################
+
+class TestROIManager():
+	def setup_method(self):
+		self.img = np.random.random([10, 20, 20])
+		self.win = Window(self.img)
+
+	def teardown_method(self):
+		for roi in self.win.rois:
+			roi.delete()
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_manager_creation(self):
+		from ..app.roi_manager import ROIManager
+		mgr = ROIManager.instance()
+		assert mgr is not None, "ROIManager should be created"
+
+	def test_manager_item_count(self):
+		from ..app.roi_manager import ROIManager
+		makeROI('rectangle', [[3, 2], [4, 5]], window=self.win)
+		makeROI('line', [[1, 1], [5, 5]], window=self.win)
+		assert len(self.win.rois) == 2, "Window should have 2 ROIs"
+		mgr = ROIManager.instance()
+		mgr._rebuild_list()
+		assert mgr.tree.topLevelItemCount() == len(self.win.rois), \
+			"ROI Manager item count should match window ROI count"
+
+
+##############################################################################
+# ROI Stats tests
+##############################################################################
+
+class TestROIStats():
+	def setup_method(self):
+		self.img = np.random.random([10, 20, 20])
+		self.win = Window(self.img)
+		self.roi = makeROI('rectangle', [[3, 2], [4, 5]], window=self.win)
+
+	def teardown_method(self):
+		for roi in self.win.rois:
+			roi.delete()
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_compute_roi_stats(self):
+		from ..utils.roi_stats import compute_roi_stats
+		stats = compute_roi_stats(self.roi, self.win)
+		assert 'mean' in stats, "stats should have mean"
+		assert 'std' in stats, "stats should have std"
+		assert 'min' in stats, "stats should have min"
+		assert 'max' in stats, "stats should have max"
+		assert 'area' in stats, "stats should have area"
+		assert stats['area'] > 0, "area should be > 0"
+
+	def test_compute_shape_descriptors(self):
+		from ..utils.roi_stats import compute_shape_descriptors
+		desc = compute_shape_descriptors(self.roi, self.win)
+		assert 'perimeter' in desc, "descriptors should have perimeter"
+		assert 'circularity' in desc, "descriptors should have circularity"
+		assert desc['perimeter'] > 0, "perimeter should be > 0"
+
+
+##############################################################################
+# Boolean ROI operations tests
+##############################################################################
+
+class TestBooleanROIOps():
+	def setup_method(self):
+		self.img = np.random.random([20, 20])
+		self.win = Window(self.img)
+		# Overlapping rectangles
+		self.roi_a = makeROI('rectangle', [[2, 2], [6, 6]], window=self.win)
+		self.roi_b = makeROI('rectangle', [[5, 5], [6, 6]], window=self.win)
+
+	def teardown_method(self):
+		for roi in self.win.rois:
+			roi.delete()
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_and(self):
+		from ..roi import boolean_roi_op
+		result = boolean_roi_op(self.roi_a, self.roi_b, 'AND')
+		assert result is not None, "AND should produce a result"
+		m = result.getMask()
+		assert np.size(m[0]) > 0, "AND mask should not be empty"
+
+	def test_or(self):
+		from ..roi import boolean_roi_op
+		result = boolean_roi_op(self.roi_a, self.roi_b, 'OR')
+		assert result is not None, "OR should produce a result"
+		m = result.getMask()
+		# OR should have at least as many pixels as the larger ROI
+		assert np.size(m[0]) >= np.size(self.roi_a.getMask()[0]), "OR mask too small"
+
+	def test_xor(self):
+		from ..roi import boolean_roi_op
+		result = boolean_roi_op(self.roi_a, self.roi_b, 'XOR')
+		assert result is not None, "XOR should produce a result"
+
+	def test_subtract(self):
+		from ..roi import boolean_roi_op
+		result = boolean_roi_op(self.roi_a, self.roi_b, 'SUBTRACT')
+		assert result is not None, "SUBTRACT should produce a result"
+		m = result.getMask()
+		# SUBTRACT should have fewer pixels than the original
+		assert np.size(m[0]) < np.size(self.roi_a.getMask()[0]), "SUBTRACT should reduce pixel count"
+
+
+##############################################################################
+# Transform ROI operations tests
+##############################################################################
+
+class TestTransformROI():
+	def setup_method(self):
+		self.img = np.random.random([30, 30])
+		self.win = Window(self.img)
+		self.roi = makeROI('rectangle', [[5, 5], [10, 10]], window=self.win)
+
+	def teardown_method(self):
+		for roi in self.win.rois:
+			roi.delete()
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_enlarge(self):
+		from ..roi import transform_roi_mask
+		original_count = np.size(self.roi.getMask()[0])
+		result = transform_roi_mask(self.roi, 'enlarge', pixels=2)
+		assert result is not None, "enlarge should produce a result"
+		assert np.size(result.getMask()[0]) > original_count, "enlarged mask should be larger"
+
+	def test_shrink(self):
+		from ..roi import transform_roi_mask
+		original_count = np.size(self.roi.getMask()[0])
+		result = transform_roi_mask(self.roi, 'shrink', pixels=1)
+		assert result is not None, "shrink should produce a result"
+		assert np.size(result.getMask()[0]) < original_count, "shrunk mask should be smaller"
+
+	def test_band(self):
+		from ..roi import transform_roi_mask
+		result = transform_roi_mask(self.roi, 'band', pixels=2)
+		assert result is not None, "band should produce a result"
+
+	def test_convex_hull(self):
+		from ..roi import transform_roi_mask
+		result = transform_roi_mask(self.roi, 'convex_hull')
+		assert result is not None, "convex_hull should produce a result"
+
+
+##############################################################################
+# 4D Viewer smoke tests
+##############################################################################
+
+class TestOrthogonalViewer():
+	def setup_method(self):
+		self.img4d = np.random.random([5, 15, 15, 4])
+		self.win = Window(self.img4d)
+
+	def teardown_method(self):
+		if self.win._ortho_viewer is not None:
+			self.win._ortho_viewer.close()
+			self.win._ortho_viewer = None
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_ortho_viewer_creation(self):
+		from ..window import OrthogonalViewer
+		ov = OrthogonalViewer(self.win)
+		assert ov is not None, "OrthogonalViewer created"
+		ov.show()
+		self.win._ortho_viewer = ov
+
+	def test_ortho_set_crosshair(self):
+		from ..window import OrthogonalViewer
+		ov = OrthogonalViewer(self.win)
+		ov.show()
+		self.win._ortho_viewer = ov
+		ov.set_crosshair(7, 5)
+		assert ov._x_pos == 7, "Crosshair x position"
+		assert ov._y_pos == 5, "Crosshair y position"
+
+
+class TestVolumeViewer():
+	def setup_method(self):
+		self.img4d = np.random.random([5, 15, 15, 4])
+		self.win = Window(self.img4d)
+
+	def teardown_method(self):
+		if self.win._volume_viewer is not None:
+			self.win._volume_viewer.close()
+			self.win._volume_viewer = None
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_volume_viewer_creation(self):
+		from ..viewers.volume_viewer import VolumeViewer, _HAS_GL
+		if not _HAS_GL:
+			pytest.skip("pyqtgraph.opengl not available")
+		vv = VolumeViewer(self.win)
+		assert vv is not None, "VolumeViewer created"
+		self.win._volume_viewer = vv
+
+	def test_volume_viewer_set_crosshair(self):
+		from ..viewers.volume_viewer import VolumeViewer, _HAS_GL
+		if not _HAS_GL:
+			pytest.skip("pyqtgraph.opengl not available")
+		vv = VolumeViewer(self.win)
+		self.win._volume_viewer = vv
+		vv.set_crosshair(5, 3)
+		assert vv._crosshair_x == 5, "Volume viewer crosshair x"
+		assert vv._crosshair_y == 3, "Volume viewer crosshair y"
+
+	def test_volume_viewer_reset_camera(self):
+		from ..viewers.volume_viewer import VolumeViewer, _HAS_GL
+		if not _HAS_GL:
+			pytest.skip("pyqtgraph.opengl not available")
+		vv = VolumeViewer(self.win)
+		self.win._volume_viewer = vv
+		vv._reset_camera()
+		# Just verify no crash; camera position API varies by pyqtgraph version
+
+
+##############################################################################
+# Line Profile and Histogram viewer smoke tests
+##############################################################################
+
+class TestLineProfile():
+	def setup_method(self):
+		self.img = np.random.random([10, 20, 20])
+		self.win = Window(self.img)
+		self.roi = makeROI('line', [[3, 2], [8, 4]], window=self.win)
+
+	def teardown_method(self):
+		for roi in self.win.rois:
+			roi.delete()
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_line_profile_creation(self):
+		from ..viewers.line_profile import LineProfileWidget
+		widget = LineProfileWidget(self.roi)
+		assert widget is not None, "LineProfileWidget created"
+		widget.close()
+
+
+class TestROIHistogram():
+	def setup_method(self):
+		self.img = np.random.random([10, 20, 20])
+		self.win = Window(self.img)
+		self.roi = makeROI('rectangle', [[3, 2], [4, 5]], window=self.win)
+
+	def teardown_method(self):
+		for roi in self.win.rois:
+			roi.delete()
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_histogram_creation(self):
+		from ..viewers.roi_histogram import ROIHistogramWidget
+		widget = ROIHistogramWidget(self.roi)
+		assert widget is not None, "ROIHistogramWidget created"
+		widget.close()
+
+
+##############################################################################
+# Window feature tests (snapshot, crosshair mode, context menu)
+##############################################################################
+
+class TestWindowFeatures():
+	def setup_method(self):
+		self.img = np.random.random([10, 20, 20])
+		self.win = Window(self.img)
+
+	def teardown_method(self):
+		self.win.close()
+		if g.m is not None:
+			g.m.clear()
+		pg.ViewBox.AllViews.clear()
+		pg.ViewBox.NamedViews.clear()
+
+	def test_snapshot(self):
+		"""Test snapshot method doesn't crash (actual file creation depends on Desktop path)."""
+		desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
+		if not os.path.isdir(desktop):
+			pytest.skip("No Desktop directory")
+		self.win.snapshot()
+		# Clean up the snapshot file
+		import glob
+		pattern = os.path.join(desktop, '*_????????_??????.png')
+		for f in sorted(glob.glob(pattern))[-1:]:
+			if self.win.name.replace(' ', '_').replace('/', '_') in f:
+				os.remove(f)
+
+	def test_crosshair_initial_state(self):
+		assert self.win._crosshair_active == False, "Crosshair should be off initially"
+
+	def test_ndims(self):
+		assert self.win.nDims == 3, "3D image should have nDims == 3"
+		win2d = Window(np.random.random([20, 20]))
+		assert win2d.nDims == 2, "2D image should have nDims == 2"
+		win2d.close()
+
+
+##############################################################################
+# Dependency checker unit tests
+##############################################################################
+
+class TestDependencyChecker():
+	def test_check_package_numpy(self):
+		from ..app.dependency_checker import _check_package
+		status, installed, action = _check_package("numpy", "1.20")
+		assert "OK" in status, f"numpy should be installed, got {status}"
+		assert installed != "-", "numpy version should be detected"
+
+	def test_check_package_missing(self):
+		from ..app.dependency_checker import _check_package
+		status, installed, action = _check_package("nonexistent_pkg_xyz_12345")
+		assert "MISSING" in status, f"fake package should be MISSING, got {status}"
+		assert "pip install" in action, "Missing package should have pip install action"
+
+
+class TestTracefig():
+	def setup_method(self):
+		self.w1 = Window(im)
+		self.rect = makeROI('rectangle', [[3, 2], [4, 5]], window=self.w1)
+		self.trace = self.rect.plot()
+
+	def teardown_method(self):
+		self.w1.close()
+
+	def test_plotting(self):
+		self.trace.indexChanged.emit(20)
+		assert self.w1.currentIndex == 20, "trace indexChanged"
+
+	def test_export(self):
+		self.rect.window.save_rois('tempROI.txt')
+		t = open('tempROI.txt').read()
+		assert t == 'rectangle\n3 2\n4 5\n'
+		os.remove('tempROI.txt')

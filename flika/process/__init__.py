@@ -1,131 +1,48 @@
-"""
-Process module for flika - provides image processing operations.
-"""
+# -*- coding: utf-8 -*-
+from ..logger import logger
+logger.debug("Started 'reading process/__init__.py'")
 
-# Import specific functions/classes from each module
-from flika.process.binary import (
-    adaptive_threshold,
-    binary_dilation,
-    binary_erosion,
-    canny_edge_detector,
-    generate_rois,
-    logically_combine,
-    remove_small_blobs,
-    threshold,
-)
-from flika.process.color import split_channels
-from flika.process.file_ import close, open_file
-from flika.process.filters import (
-    bilateral_filter,
-    boxcar_differential_filter,
-    butterworth_filter,
-    difference_filter,
-    difference_of_gaussians,
-    fourier_filter,
-    gaussian_blur,
-    mean_filter,
-    median_filter,
-    variance_filter,
-    wavelet_filter,
-)
-from flika.process.math_ import (
-    absolute_value,
-    divide,
-    divide_trace,
-    multiply,
-    power,
-    ratio,
-    sqrt,
-    subtract,
-    subtract_trace,
-)
-from flika.process.measure import measure
-from flika.process.overlay import background, scale_bar, time_stamp
-from flika.process.roi import set_value
-from flika.process.stacks import (
-    change_datatype,
-    concatenate_stacks,
-    deinterleave,
-    duplicate,
-    frame_binning,
-    generate_random_image,
-    image_calculator,
-    pixel_binning,
-    resize,
-    trim,
-    zproject,
-)
+from .stacks import *
+from .math_ import *
+from .filters import *
+from .binary import *
+from .roi import *
+from .measure import *
+from .color import *
+from .overlay import *
+from .file_ import *
+from .compositing import *
+from .colocalization import *
+from .watershed import *
+from .spt import *
 
-# Define what's available when using `from flika.process import *`
-__all__ = [
-    # binary module
-    "threshold",
-    "remove_small_blobs",
-    "adaptive_threshold",
-    "logically_combine",
-    "binary_dilation",
-    "binary_erosion",
-    "generate_rois",
-    "canny_edge_detector",
-    # color module
-    "split_channels",
-    # file_ module
-    "open_file",
-    "close",
-    # filters module
-    "gaussian_blur",
-    "difference_of_gaussians",
-    "mean_filter",
-    "variance_filter",
-    "median_filter",
-    "butterworth_filter",
-    "boxcar_differential_filter",
-    "wavelet_filter",
-    "difference_filter",
-    "fourier_filter",
-    "bilateral_filter",
-    # math_ module
-    "subtract",
-    "multiply",
-    "divide",
-    "power",
-    "sqrt",
-    "ratio",
-    "absolute_value",
-    "subtract_trace",
-    "divide_trace",
-    # measure module
-    "measure",
-    # overlay module
-    "time_stamp",
-    "background",
-    "scale_bar",
-    # roi module
-    "set_value",
-    # stacks module
-    "deinterleave",
-    "trim",
-    "zproject",
-    "image_calculator",
-    "pixel_binning",
-    "frame_binning",
-    "resize",
-    "concatenate_stacks",
-    "duplicate",
-    "generate_random_image",
-    "change_datatype",
-]
+def _show_results_table():
+    """Open the SPT Results Table dock widget from the menu."""
+    from .. import global_vars as g
+    from ..viewers.results_table import ResultsTableWidget
+    from qtpy.QtCore import Qt
+    table = ResultsTableWidget.instance(g.m)
+    g.m.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, table)
+
+    # Populate with current window's data if available
+    win = getattr(g, 'win', None)
+    if win is not None:
+        spt = win.metadata.get('spt', {}) if hasattr(win, 'metadata') else {}
+        pdata = spt.get('particle_data')
+        if pdata is not None:
+            table.set_particle_data(pdata)
+
+    table.show()
+    table.raise_()
 
 
 def setup_menus():
-    """Set up the flika menu structure for process operations."""
-    import flika.global_vars as g
-
+    logger.debug("Started 'process.__init__.setup_menus()'")
+    from .. import global_vars as g
     if len(g.menus) > 0:
-        print("flika menubar already initialized.")
+        logger.info("flika menubar already initialized.")
         return
-    from qtpy import QtWidgets
-
+    from qtpy import QtGui, QtWidgets
     imageMenu = QtWidgets.QMenu("Image")
     processMenu = QtWidgets.QMenu("Process")
 
@@ -136,6 +53,7 @@ def setup_menus():
 
     addAction(stacksMenu, "Duplicate", duplicate)
     addAction(stacksMenu, "Generate Random Image", generate_random_image.gui)
+    addAction(stacksMenu, "Generate Phantom Volume", generate_phantom_volume.gui)
     addAction(stacksMenu, "Trim Frames", trim.gui)
     addAction(stacksMenu, "Deinterlace", deinterleave.gui)
     addAction(stacksMenu, "Z Project", zproject.gui)
@@ -144,9 +62,14 @@ def setup_menus():
     addAction(stacksMenu, "Resize", resize.gui)
     addAction(stacksMenu, "Concatenate Stacks", concatenate_stacks.gui)
     addAction(stacksMenu, "Change Data Type", change_datatype.gui)
+    stacksMenu.addSeparator()
+    addAction(stacksMenu, "Shear Transform", shear_transform.gui)
+    addAction(stacksMenu, "Motion Correction", motion_correction.gui)
 
     colorMenu = imageMenu.addMenu("Color")
     addAction(colorMenu, "Split Channels", split_channels.gui)
+    addAction(colorMenu, "Blend Channels", blend_channels.gui)
+    addAction(colorMenu, "Channel Compositor", channel_compositor.gui)
 
     addAction(imageMenu, "Measure", measure.gui)
     addAction(imageMenu, "Set Value", set_value.gui)
@@ -154,15 +77,15 @@ def setup_menus():
     addAction(overlayMenu, "Background", background.gui)
     addAction(overlayMenu, "Timestamp", time_stamp.gui)
     addAction(overlayMenu, "Scale Bar", scale_bar.gui)
+    addAction(overlayMenu, "Track Overlay", lambda: __import__('flika.viewers.track_overlay', fromlist=['show_track_overlay']).show_track_overlay())
 
     binaryMenu = processMenu.addMenu("Binary")
     mathMenu = processMenu.addMenu("Math")
     filtersMenu = processMenu.addMenu("Filters")
-    processMenu.addAction(
-        QtWidgets.QAction(
-            "Image Calculator", processMenu, triggered=image_calculator.gui
-        )
-    )
+    processMenu.addAction(QtWidgets.QAction("Image Calculator", processMenu, triggered=image_calculator.gui))
+
+    colocMenu = processMenu.addMenu("Colocalization")
+    addAction(colocMenu, "Colocalization Analysis", colocalization.gui)
 
     addAction(binaryMenu, "Threshold", threshold.gui)
     addAction(binaryMenu, "Adaptive Threshold", adaptive_threshold.gui)
@@ -173,6 +96,11 @@ def setup_menus():
     addAction(binaryMenu, "Binary Erosion", binary_erosion.gui)
     addAction(binaryMenu, "Binary Dilation", binary_dilation.gui)
     addAction(binaryMenu, "Generate ROIs", generate_rois.gui)
+    binaryMenu.addSeparator()
+    addAction(binaryMenu, "Analyze Particles", analyze_particles.gui)
+    binaryMenu.addSeparator()
+    addAction(binaryMenu, "Distance Transform", distance_transform.gui)
+    addAction(binaryMenu, "Watershed Segmentation", watershed_segmentation.gui)
 
     addAction(mathMenu, "Multiply", multiply.gui)
     addAction(mathMenu, "Divide", divide.gui)
@@ -183,6 +111,9 @@ def setup_menus():
     addAction(mathMenu, "Absolute Value", absolute_value.gui)
     addAction(mathMenu, "Subtract Trace", subtract_trace.gui)
     addAction(mathMenu, "Divide Trace", divide_trace.gui)
+    mathMenu.addSeparator()
+    addAction(mathMenu, "Histogram Equalize", histogram_equalize.gui)
+    addAction(mathMenu, "Normalize", normalize.gui)
 
     addAction(filtersMenu, "Gaussian Blur", gaussian_blur.gui)
     addAction(filtersMenu, "Difference of Gaussians", difference_of_gaussians.gui)
@@ -197,5 +128,15 @@ def setup_menus():
     addAction(filtersMenu, "Wavelet Filter", wavelet_filter.gui)
     addAction(filtersMenu, "Bilateral Filter", bilateral_filter.gui)
 
+    sptMenu = processMenu.addMenu("SPT Analysis")
+    addAction(sptMenu, "SPT Control Panel", spt_analysis.gui)
+    addAction(sptMenu, "Detect Particles", detect_particles.gui)
+    addAction(sptMenu, "Link Particles", link_particles_process.gui)
+    sptMenu.addSeparator()
+    addAction(sptMenu, "Results Table", _show_results_table)
+
     g.menus.append(imageMenu)
     g.menus.append(processMenu)
+    logger.debug("Completed 'process.__init__.setup_menus()'")
+
+logger.debug("Completed 'reading process/__init__.py'")

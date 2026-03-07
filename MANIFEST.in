@@ -1,7 +1,6 @@
-recursive-include flika *.ui *.png *.ico *.tif *.txt *.py
-include README.md
+recursive-include flika *.ui *.png *.ico
+include README.rst
 include LICENSE
-include pyproject.toml
-include py.typed
+include CHANGELOG.rst
+include AUTHORS.rst
 include flika.desktop
-recursive-include examples *.py

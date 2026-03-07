@@ -1,29 +1,24 @@
+from ..logger import logger, handle_exception
+logger.debug("Started 'reading app/application.py'")
+
+import sys, os, time
 import ctypes
-import os
 import platform
-import sys
 import traceback
+logger.debug("Started 'reading app/application.py, importing qtpy'")
+from qtpy import QtCore, QtWidgets, QtGui
+logger.debug("Completed 'reading app/application.py, importing qtpy'")
 
-from qtpy import QtCore, QtGui, QtWidgets
-from qtpy.QtCore import QUrl
-from qtpy.QtGui import QDesktopServices
-
-from flika import global_vars as g
-from flika.app.plugin_manager import PluginManager, load_local_plugins
-from flika.app.script_editor import ScriptEditor
-from flika.app.settings_editor import (
-    SettingsEditor,
-    pencilSettings,
-    pointSettings,
-    rectSettings,
-)
-from flika.images import image_path
-from flika.logger import handle_exception, logger
-from flika.update_flika import checkUpdates
-from flika.utils.app import get_qapp
-from flika.utils.misc import load_ui, nonpartial, send_error_report, send_user_stats
-from flika.utils.thread_manager import cleanup_threads, run_in_thread
-from flika.version import __version__
+from ..utils.misc import nonpartial
+from ..utils.app import get_qapp
+from ..app.settings_editor import SettingsEditor, rectSettings, pointSettings, pencilSettings, csSettings
+from .. import global_vars as g
+from .plugin_manager import PluginManager, Load_Local_Plugins_Thread
+from .script_editor import ScriptEditor
+from ..utils.misc import load_ui, send_error_report, Send_User_Stats_Thread
+from ..images import image_path
+from ..version import __version__
+from ..update_flika import checkUpdates
 
 
 def status_pixmap(attention=False):
@@ -46,7 +41,8 @@ def status_pixmap(attention=False):
 
 
 class ClickableLabel(QtWidgets.QLabel):
-    """A QtGui.QLabel you can click on to generate events"""
+    """A QtGui.QLabel you can click on to generate events
+    """
 
     clicked = QtCore.Signal()
 
@@ -55,7 +51,8 @@ class ClickableLabel(QtWidgets.QLabel):
 
 
 class Logger(QtWidgets.QWidget):
-    """A window to display error messages"""
+    """A window to display error messages
+    """
 
     def __init__(self, parent=None):
         super(Logger, self).__init__(parent)
@@ -71,19 +68,19 @@ class Logger(QtWidgets.QWidget):
         self._status.setPixmap(status_pixmap())
         self._status.setContentsMargins(0, 0, 0, 0)
 
-        vlayout = QtWidgets.QVBoxLayout()
+        l = QtWidgets.QVBoxLayout()
         h = QtWidgets.QHBoxLayout()
-        vlayout.setContentsMargins(2, 2, 2, 2)
-        vlayout.setSpacing(2)
+        l.setContentsMargins(2, 2, 2, 2)
+        l.setSpacing(2)
         h.setContentsMargins(0, 0, 0, 0)
 
-        vlayout.addWidget(self._text)
+        l.addWidget(self._text)
         h.insertStretch(0)
         h.addWidget(report)
         h.addWidget(clear)
-        vlayout.addLayout(h)
+        l.addLayout(h)
 
-        self.setLayout(vlayout)
+        self.setLayout(l)
 
     @property
     def status_light(self):
@@ -112,23 +109,14 @@ class Logger(QtWidgets.QWidget):
         Send the contents of the log as a bug report
         """
         text = self._text.document().toPlainText()
-        email = QtWidgets.QInputDialog.getText(
-            self,
-            "Response email",
-            "Enter your email if you would like us to contact you about this bug.",
-        )
+        email = QtWidgets.QInputDialog.getText(self, "Response email", "Enter your email if you would like us to contact you about this bug.")
         if isinstance(email, tuple) and len(email) == 2:
             email = email[0]
         response = send_error_report(email=email, report=text)
         if response is None or response.status_code != 200:
-            g.alert(
-                "Failed to send error report. Response {}:\n{}".format(
-                    response.status_code if response else "None",
-                    response._content if response else "Connection failed",
-                )
-            )
+            g.alert("Failed to send error report. Response {}:\n{}".format((response.status_code, response._content)))
         else:
-            if email != "":
+            if email != '':
                 g.alert("Bug report sent. We will contact you as soon as we can.")
             else:
                 g.alert("Bug report sent. Thank you!")
@@ -137,7 +125,7 @@ class Logger(QtWidgets.QWidget):
         """_clear(self)
         Erase the log
         """
-        self._text.setText("")
+        self._text.setText('')
         self._status.setPixmap(status_pixmap(attention=False))
         self.close()
 
@@ -156,17 +144,23 @@ class Logger(QtWidgets.QWidget):
             self.hide()
 
 
+
 class FlikaApplication(QtWidgets.QMainWindow):
-    """The main window of flika, stored as g.m"""
-
+    """The main window of flika, stored as g.m
+    """
     def __init__(self):
-        from flika.process import setup_menus
-
-        self.app = get_qapp(image_path("favicon.png"))
+        logger.debug("Started 'creating app.application.FlikaApplication'")
+        from ..process.file_ import open_file, open_file_from_gui, open_image_sequence_from_gui, open_points, save_file, save_movie_gui, save_points, save_rois
+        from ..process import setup_menus
+        logger.debug("Started 'creating app.application.FlikaApplication.app'")
+        self.app = get_qapp(image_path('favicon.png'))
+        logger.debug("Completed 'creating app.application.FlikaApplication.app'")
         super(FlikaApplication, self).__init__()
         self.app.setQuitOnLastWindowClosed(True)
         setup_menus()
-        load_ui("main.ui", self, directory=os.path.dirname(__file__))
+        logger.debug("Started 'loading main.ui'")
+        load_ui('main.ui', self, directory=os.path.dirname(__file__))
+        logger.debug("Completed 'loading main.ui'")
 
         g.m = self
         # These are all added for backwards compatibility for plugins
@@ -177,21 +171,19 @@ class FlikaApplication(QtWidgets.QMainWindow):
         self.currentTrace = g.currentTrace
         self.clipboard = g.clipboard
         self.setWindowSize()
-        if platform.system() == "Windows":
-            myappid = "flika-org.flika." + str(__version__)
+        if platform.system() == 'Windows':
+            myappid = 'flika-org.FLIKA.' + str(__version__)
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         self.menuBar().setNativeMenuBar(False)
         self._make_menu()
         self._make_tools()
 
         self._log = Logger()
-
         def handle_exception_wrapper(exc_type, exc_value, exc_traceback):
             handle_exception(exc_type, exc_value, exc_traceback)
             tb_str = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            tb_str = "".join(tb_str) + "\n"
+            tb_str = ''.join(tb_str)+'\n'
             self._log.write(tb_str)
-
         sys.excepthook = handle_exception_wrapper
 
         g.dialogs.append(self._log)
@@ -203,19 +195,11 @@ class FlikaApplication(QtWidgets.QMainWindow):
         self.statusBar().setSizeGripEnabled(False)
         self.setCurrentWindowSignal = SetCurrentWindowSignal(self)
         self.setAcceptDrops(True)
-
-        # Load plugins synchronously
-        plugins, errors = load_local_plugins()
-        self.plugins_done(plugins)
-        # Show any errors that occurred
-        for error in errors:
-            g.alert(error)
+        self.load_local_plugins_thread = Load_Local_Plugins_Thread()
+        self.load_local_plugins_thread.start()
+        self.load_local_plugins_thread.plugins_done_sig.connect(self.plugins_done)
+        self.load_local_plugins_thread.error_loading.connect(g.alert)
         logger.debug("Completed 'creating app.application.FlikaApplication'")
-
-        self.setup_button_icons()
-
-        # Register the application cleanup function to ensure threads are terminated
-        self.app.aboutToQuit.connect(self.cleanup_application)
 
     def plugins_done(self, plugins):
         for p in plugins.values():
@@ -224,50 +208,41 @@ class FlikaApplication(QtWidgets.QMainWindow):
         PluginManager.plugins = plugins
 
     def start(self):
+        logger.debug("Started 'app.application.FlikaApplication.start()'")
         self.show()
         self.raise_()
         QtWidgets.QApplication.processEvents()
-
-        # Start the user stats thread using the new thread manager
-        self.stats_thread_controller = run_in_thread(send_user_stats)
-
-    def cleanup_application(self):
-        """
-        Clean up application resources before exit.
-        """
-        # Clean up threads
-        cleanup_threads()
+        logger.debug("Started 'app.application.FlikaApplication.send_user_stats()'")
+        self.send_user_stats_thread = Send_User_Stats_Thread()
+        self.send_user_stats_thread.start()
+        logger.debug("Completed 'app.application.FlikaApplication.send_user_stats()'")
+        logger.debug("Completed 'app.application.FlikaApplication.start()'")
+        #if 'PYCHARM_HOSTED' not in os.environ and 'SPYDER_SHELL_ID' not in os.environ:
+        #    return self.app.exec_()
 
     def setWindowSize(self):
-        # desktop = QtWidgets.QApplication.desktop()
-        # width_px=int(desktop.logicalDpiX()*3.4)
-        # height_px=int(desktop.logicalDpiY()*.9)
-        # self.setGeometry(QtCore.QRect(15, 33, width_px, height_px))
-        # self.setFixedSize(326, 80)
-        # self.setMaximumSize(width_px*3, 120)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Minimum)
+        #desktop = QtWidgets.QApplication.desktop()
+        #width_px=int(desktop.logicalDpiX()*3.4)
+        #height_px=int(desktop.logicalDpiY()*.9)
+        #self.setGeometry(QtCore.QRect(15, 33, width_px, height_px))
+        #self.setFixedSize(326, 80)
+        #self.setMaximumSize(width_px*3, 120)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Minimum);
+        self.setMinimumWidth(450)
         self.move(0, 0)
 
     def _make_menu(self):
-        from flika.process.file_ import (
-            open_file,
-            open_file_from_gui,
-            open_image_sequence_from_gui,
-            open_points,
-            save_file,
-            save_movie_gui,
-            save_points,
-            save_rois,
-        )
-        from flika.roi import open_rois
-
-        fileMenu = self.menuBar().addMenu("File")
+        logger.debug("Started 'app.application.FlikaApplication._make_menu()'")
+        from ..roi import open_rois
+        from ..process.file_ import open_file, open_file_from_gui, open_image_sequence_from_gui, open_points, open_spt_results, save_file, save_movie_gui, save_points, save_rois
+        fileMenu = self.menuBar().addMenu('File')
         openMenu = fileMenu.addMenu("Open")
         openMenu.addAction("Open Image/Movie", open_file_from_gui)
         openMenu.addAction("Open Image Sequence", open_image_sequence_from_gui)
         openMenu.addAction("Open ROIs", open_rois)
         openMenu.addAction("Open Points", open_points)
-        self.recentFileMenu = fileMenu.addMenu("Recent Files")
+        openMenu.addAction("Open SPT Results", open_spt_results)
+        self.recentFileMenu = fileMenu.addMenu('Recent Files')
         self.recentFileMenu.aboutToShow.connect(self._make_recents)
         self.recentFileMenu.triggered.connect(lambda a: open_file(a.text()))
         saveMenu = fileMenu.addMenu("Save")
@@ -275,39 +250,144 @@ class FlikaApplication(QtWidgets.QMainWindow):
         saveMenu.addAction("Save Movie (.mp4)", save_movie_gui)
         saveMenu.addAction("Save Points", save_points)
         saveMenu.addAction("Save All ROIs", save_rois)
+        saveMenu.addSeparator()
+        saveMenu.addAction("Export Provenance", self._export_provenance)
 
         fileMenu.addAction("Settings", SettingsEditor.show)
-        fileMenu.addAction("&Quit", self.close)  # app.quit)
+        fileMenu.addAction("&Quit", self.close)
+
+        editMenu = self.menuBar().addMenu('Edit')
+        undoAction = editMenu.addAction("&Undo", self._undo)
+        undoAction.setShortcut('Ctrl+Z')
+        redoAction = editMenu.addAction("&Redo", self._redo)
+        redoAction.setShortcut('Ctrl+Shift+Z')
+
+        viewMenu = self.menuBar().addMenu('View')
+        viewMenu.addAction('Orthogonal Views', lambda: g.win and g.win.toggleOrthogonalViews())
+        viewMenu.addAction('3D Volume Viewer', lambda: g.win and g.win.toggleVolumeViewer())
+        viewMenu.addAction('ROI Manager', self._toggle_roi_manager)
+        viewMenu.addAction('Metadata Editor', self._show_metadata_editor)
+        viewMenu.addAction('Figure Composer', self._show_figure_composer)
 
         for menu in g.menus:
             self.menuBar().addMenu(menu)
 
-        self.pluginMenu = self.menuBar().addMenu("Plugins")
+        self.pluginMenu = self.menuBar().addMenu('Plugins')
         self.pluginMenu.aboutToShow.connect(self._make_plugin_menu)
 
-        self.scriptMenu = self.menuBar().addMenu("Scripts")
+        self.scriptMenu = self.menuBar().addMenu('Scripts')
         self.scriptMenu.aboutToShow.connect(self._make_script_menu)
 
+        aiMenu = self.menuBar().addMenu('AI')
+        aiMenu.addAction("Generate Script", self._ai_generate_script)
+        aiMenu.addAction("Generate Plugin", self._ai_generate_plugin)
+        aiMenu.addAction("AI Denoiser", self._ai_denoise)
+        aiMenu.addAction("Pixel Classifier", self._ai_classify)
+        aiMenu.addAction("Particle Localizer", self._ai_localize)
+        aiSegMenu = aiMenu.addMenu("Segmentation")
+        aiSegMenu.addAction("Cellpose", self._ai_cellpose)
+        aiSegMenu.addAction("StarDist", self._ai_stardist)
+        aiSegMenu.addAction("SAM Interactive", self._ai_sam)
+        aiMenu.addAction("BioImage.IO Model Zoo", self._ai_model_zoo)
+
         helpMenu = self.menuBar().addMenu("Help")
-        url = "http://flika-org.github.io"
-        helpMenu.addAction("Documentation", lambda: QDesktopServices.openUrl(QUrl(url)))
+        url = 'http://flika-org.github.io'
+        helpMenu.addAction("Documentation", lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(url)))
+        helpMenu.addAction("Check For Updates", checkUpdates)
+        helpMenu.addSeparator()
+        helpMenu.addAction("Check Core Dependencies", self._check_core_deps)
+        helpMenu.addAction("Check Plugin Dependencies", self._check_plugin_deps)
+        helpMenu.addAction("GPU/Acceleration Status", self._show_gpu_status)
+        logger.debug("Completed 'app.application.FlikaApplication._make_menu()'")
 
-        # Define a wrapper function to help debug the issue
-        def run_check_updates():
-            try:
-                logger.debug("Menu action triggered checkUpdates")
-                result = checkUpdates()
-                logger.debug(f"checkUpdates returned: {result}")
-            except Exception as e:
-                import traceback
+    def _undo(self):
+        from ..core.undo import undo_stack
+        undo_stack.undo()
 
-                error_msg = (
-                    f"Error checking for updates: {str(e)}\n{traceback.format_exc()}"
-                )
-                print(error_msg)
-                g.alert(error_msg, "Update Check Error")
+    def _redo(self):
+        from ..core.undo import undo_stack
+        undo_stack.redo()
 
-        helpMenu.addAction("Check For Updates", run_check_updates)
+    def _toggle_roi_manager(self):
+        from .roi_manager import ROIManager
+        mgr = ROIManager.instance(self)
+        if mgr.isVisible():
+            mgr.hide()
+        else:
+            self.addDockWidget(QtCore.Qt.RightDockWidgetArea, mgr)
+            mgr.show()
+
+    def _ai_generate_script(self):
+        from ..ai.assistant import _show_generate_script_dialog
+        _show_generate_script_dialog()
+
+    def _ai_generate_plugin(self):
+        from ..ai.plugin_generator import _show_generate_plugin_dialog
+        _show_generate_plugin_dialog()
+
+    def _ai_cellpose(self):
+        from ..ai.segmentation import cellpose_segment
+        cellpose_segment.gui()
+
+    def _ai_stardist(self):
+        from ..ai.segmentation import stardist_segment
+        stardist_segment.gui()
+
+    def _ai_denoise(self):
+        from ..ai.segmentation import ai_denoise
+        ai_denoise.gui()
+
+    def _ai_classify(self):
+        from ..ai.segmentation import ai_classify
+        ai_classify.gui()
+
+    def _ai_localize(self):
+        from ..ai.segmentation import ai_localize
+        ai_localize.gui()
+
+    def _ai_model_zoo(self):
+        from ..ai.segmentation import ai_model_zoo
+        ai_model_zoo.gui()
+
+    def _ai_sam(self):
+        from ..ai.segmentation import ai_sam
+        ai_sam.gui()
+
+    def _export_provenance(self):
+        if g.win is None:
+            g.alert('No window selected.')
+            return
+        from ..utils.misc import save_file_gui
+        path = save_file_gui('Export Provenance', filetypes='JSON files (*.json)')
+        if path:
+            from ..utils.provenance import export_provenance
+            export_provenance(g.win, path)
+            g.m.statusBar().showMessage(f'Provenance exported to {os.path.basename(path)}')
+
+    def _show_metadata_editor(self):
+        from .metadata_editor import MetadataEditorDialog
+        dlg = MetadataEditorDialog(parent=self)
+        dlg.show()
+        g.dialogs.append(dlg)
+
+    def _show_figure_composer(self):
+        from ..viewers.figure_composer import show_figure_composer
+        show_figure_composer(parent=self)
+
+    def _check_core_deps(self):
+        from .dependency_checker import CoreDependencyDialog
+        dlg = CoreDependencyDialog(self)
+        dlg.exec()
+
+    def _check_plugin_deps(self):
+        from .dependency_checker import PluginDependencyDialog
+        dlg = PluginDependencyDialog(self)
+        dlg.exec()
+
+    def _show_gpu_status(self):
+        from .gpu_status import GPUStatusDialog
+        dlg = GPUStatusDialog(self)
+        dlg.exec()
 
     def __getattr__(self, item):
         if item in self.__dict__:
@@ -316,22 +396,15 @@ class FlikaApplication(QtWidgets.QMainWindow):
             return g.__dict__[item]
         raise AttributeError(item)
 
+
     def _make_tools(self):
-        self.freehand.clicked.connect(
-            lambda: g.settings.__setitem__("mousemode", "freehand")
-        )
-        self.line.clicked.connect(lambda: g.settings.__setitem__("mousemode", "line"))
-        self.rect_line.clicked.connect(
-            lambda: g.settings.__setitem__("mousemode", "rect_line")
-        )
-        self.pencil.clicked.connect(
-            lambda: g.settings.__setitem__("mousemode", "pencil")
-        )
-        self.rectangle.clicked.connect(
-            lambda: g.settings.__setitem__("mousemode", "rectangle")
-        )
-        self.point.clicked.connect(lambda: g.settings.__setitem__("mousemode", "point"))
-        self.mouse.clicked.connect(lambda: g.settings.__setitem__("mousemode", "mouse"))
+        self.freehand.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'freehand'))
+        self.line.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'line'))
+        self.rect_line.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'rect_line'))
+        self.pencil.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'pencil'))
+        self.rectangle.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'rectangle'))
+        self.point.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'point'))
+        self.mouse.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'mouse'))
 
         self.point.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.point.customContextMenuRequested.connect(pointSettings)
@@ -340,66 +413,102 @@ class FlikaApplication(QtWidgets.QMainWindow):
         self.rectangle.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.rectangle.customContextMenuRequested.connect(rectSettings)
 
+        # Add ellipse button programmatically (after pencil at x=250)
+        central = self.centralWidget()
+        icon_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'images')
+
+        self.ellipse_btn = QtWidgets.QPushButton(central)
+        self.ellipse_btn.setGeometry(QtCore.QRect(290, 0, 41, 31))
+        self.ellipse_btn.setCheckable(True)
+        self.ellipse_btn.setAutoExclusive(True)
+        self.ellipse_btn.setToolTip("Ellipse ROI")
+        self.ellipse_btn.setIcon(QtGui.QIcon(os.path.join(icon_dir, 'ellipse.png')))
+        self.ellipse_btn.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'ellipse'))
+
+        # Add center-surround button
+        self.cs_btn = QtWidgets.QPushButton(central)
+        self.cs_btn.setGeometry(QtCore.QRect(330, 0, 41, 31))
+        self.cs_btn.setCheckable(True)
+        self.cs_btn.setAutoExclusive(True)
+        self.cs_btn.setToolTip("Center-Surround ROI")
+        self.cs_btn.setIcon(QtGui.QIcon(os.path.join(icon_dir, 'center_surround.png')))
+        self.cs_btn.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'center_surround'))
+        self.cs_btn.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.cs_btn.customContextMenuRequested.connect(csSettings)
+
+        # Add point ROI button
+        self.point_roi_btn = QtWidgets.QPushButton(central)
+        self.point_roi_btn.setGeometry(QtCore.QRect(370, 0, 41, 31))
+        self.point_roi_btn.setCheckable(True)
+        self.point_roi_btn.setAutoExclusive(True)
+        self.point_roi_btn.setToolTip("Point ROI (single pixel)")
+        self.point_roi_btn.setIcon(QtGui.QIcon(os.path.join(icon_dir, 'point_roi.png')))
+        self.point_roi_btn.clicked.connect(lambda: g.settings.__setitem__('mousemode', 'point_roi'))
+
     def _make_script_menu(self):
+        logger.debug('Making script editor')
+        from .macro_recorder import _toggle_recording, _save_macro, _run_macro, macro_recorder
         self.scriptMenu.clear()
-        self.scriptEditorAction = self.scriptMenu.addAction(
-            "Script Editor", ScriptEditor.show
-        )
+        self.scriptEditorAction = self.scriptMenu.addAction('Script Editor', ScriptEditor.show)
         self.scriptMenu.addSeparator()
-
+        rec_text = 'Stop Recording' if macro_recorder.is_recording else 'Record Macro'
+        self.scriptMenu.addAction(rec_text, _toggle_recording)
+        self.scriptMenu.addAction('Save Macro', _save_macro)
+        self.scriptMenu.addAction('Run Macro', _run_macro)
+        self.scriptMenu.addSeparator()
         def openScript(script):
-            return lambda: ScriptEditor.importScript(script)
-
-        for recent_script in g.settings["recent_scripts"]:
+            return lambda : ScriptEditor.importScript(script)
+        for recent_script in g.settings['recent_scripts']:
             self.scriptMenu.addAction(recent_script, openScript(recent_script))
+        self.scriptMenu.addSeparator()
+        from .templates import template_manager
+        template_manager.populate_menu(self.scriptMenu)
+        logger.debug('Script editor complete')
 
     def _make_plugin_menu(self):
+        logger.debug('Making Plugin Manager')
         self.pluginMenu.clear()
-        self.pluginMenu.addAction("Plugin Manager", PluginManager.show)
+        self.pluginMenu.addAction('Plugin Manager', PluginManager.show)
         self.pluginMenu.addSeparator()
+        logger.debug('Plugin Manager complete')
 
-        installedPlugins = [
-            plugin for plugin in PluginManager.plugins.values() if plugin.installed
-        ]
+        installedPlugins = [plugin for plugin in PluginManager.plugins.values() if plugin.installed]
         for plugin in sorted(installedPlugins, key=lambda a: -a.lastModified()):
             if isinstance(plugin.menu, QtWidgets.QMenu):
                 self.pluginMenu.addMenu(plugin.menu)
 
     def _make_recents(self):
+        logger.debug('Making recent files')
         self.recentFileMenu.clear()
-        g.settings["recent_files"] = [
-            f for f in g.settings["recent_files"] if os.path.exists(f)
-        ]
-        if len(g.settings["recent_files"]) == 0:
-            noAction = QtWidgets.QAction("No Recent Files", self.recentFileMenu)
+        g.settings['recent_files'] = [f for f in g.settings['recent_files'] if os.path.exists(f)]
+        if len(g.settings['recent_files']) == 0:
+            noAction = QtWidgets.QAction('No Recent Files', self.recentFileMenu)
             noAction.setEnabled(False)
             self.recentFileMenu.addAction(noAction)
         else:
-            for name in g.settings["recent_files"][::-1]:
+            for name in g.settings['recent_files'][::-1]:
                 if isinstance(name, str) and os.path.exists(name):
                     self.recentFileMenu.addAction(name)
+        logger.debug('Recent files complete')
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
-            event.accept()  # must accept the dragEnterEvent or else the dropEvent can't occur !!!
+            event.accept()   # must accept the dragEnterEvent or else the dropEvent can't occur !!!
         else:
             event.ignore()
 
     def dropEvent(self, event):
-        from flika.process.file_ import open_file
-
-        if event.mimeData().hasUrls():  # if file or link is dropped
+        from ..process.file_ import open_file
+        if event.mimeData().hasUrls():   # if file or link is dropped
             for url in event.mimeData().urls():
                 filename = url.toLocalFile()
                 filename = str(filename)
-                # if platform.system() == 'Windows':
+                #if platform.system() == 'Windows':
                 #    filename = filename.split('file:///')[1]
-                # else:
+                #else:
                 #    filename = filename.split('file://')[1]
-                print("filename = '{}'".format(filename))
-                open_file(
-                    filename
-                )  # This fails on windows symbolic links.  http://stackoverflow.com/questions/15258506/os-path-islink-on-windows-with-python
+                logger.debug("filename = '{}'".format(filename))
+                open_file(filename)  # This fails on windows symbolic links.  http://stackoverflow.com/questions/15258506/os-path-islink-on-windows-with-python
                 event.accept()
         else:
             event.ignore()
@@ -419,7 +528,7 @@ class FlikaApplication(QtWidgets.QMainWindow):
         """closeEvent(self, event)
         Close all widgets and exit flika
         """
-        print("Closing flika")
+        logger.info('Closing flika')
         event.accept()
         ScriptEditor.close()
         PluginManager.close()
@@ -428,20 +537,10 @@ class FlikaApplication(QtWidgets.QMainWindow):
         if g.m == self:
             g.m = None
 
-    def setup_button_icons(self):
-        """Ultra-simple button icon setup"""
-        from flika.images import image_path
-
-        # One-liner for most buttons (assumes button name matches icon name)
-        for btn in self.findChildren(QtWidgets.QPushButton):
-            name = btn.objectName()
-            icon_name = f"{name}.png"
-            btn.setIcon(QtGui.QIcon(image_path(icon_name)))
-
-
 class SetCurrentWindowSignal(QtWidgets.QWidget):
-    sig = QtCore.Signal()
+    sig=QtCore.Signal()
 
-    def __init__(self, parent):
+    def __init__(self,parent):
         super(SetCurrentWindowSignal, self).__init__(parent)
         self.hide()
+logger.debug("Completed 'reading app/application.py'")
