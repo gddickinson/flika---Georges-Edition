@@ -322,13 +322,21 @@ class ObjectDetectionDialog(QtWidgets.QDialog):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
 
+        # Use a splitter: top = config, bottom = saved models
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+
+        # --- Top: Training configuration ---
+        top_widget = QtWidgets.QWidget()
+        top_layout = QtWidgets.QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+
         # Mode
         mode_row = QtWidgets.QHBoxLayout()
         mode_row.addWidget(QtWidgets.QLabel('Mode:'))
         self._train_mode = QtWidgets.QComboBox()
         self._train_mode.addItems(['Train from Scratch', 'Fine-tune Pretrained'])
         mode_row.addWidget(self._train_mode)
-        layout.addLayout(mode_row)
+        top_layout.addLayout(mode_row)
 
         # Data source
         data_row = QtWidgets.QHBoxLayout()
@@ -339,18 +347,18 @@ class ObjectDetectionDialog(QtWidgets.QDialog):
         self._data_dir_btn = QtWidgets.QPushButton('Browse...')
         self._data_dir_btn.clicked.connect(self._browse_data_dir)
         data_row.addWidget(self._data_dir_btn)
-        layout.addLayout(data_row)
+        top_layout.addLayout(data_row)
 
         self._data_yaml_path = QtWidgets.QLineEdit()
         self._data_yaml_path.setPlaceholderText('Path to data.yaml (for external dataset)')
-        layout.addWidget(self._data_yaml_path)
+        top_layout.addWidget(self._data_yaml_path)
 
         # For fine-tune: base model
         ft_row = QtWidgets.QHBoxLayout()
         ft_row.addWidget(QtWidgets.QLabel('Base Model:'))
         self._ft_model_combo = QtWidgets.QComboBox()
         ft_row.addWidget(self._ft_model_combo)
-        layout.addLayout(ft_row)
+        top_layout.addLayout(ft_row)
 
         # Training params
         form = QtWidgets.QFormLayout()
@@ -392,26 +400,24 @@ class ObjectDetectionDialog(QtWidgets.QDialog):
         self._train_device.addItems(['Auto', 'CPU', 'CUDA', 'MPS'])
         form.addRow('Device:', self._train_device)
 
-        layout.addLayout(form)
+        top_layout.addLayout(form)
 
-        # Loss plot
-        self._loss_plot = pg.PlotWidget(title='Training Loss')
-        self._loss_plot.setLabel('bottom', 'Epoch')
-        self._loss_plot.setLabel('left', 'Loss')
-        self._loss_plot.addLegend()
-        self._box_loss_curve = self._loss_plot.plot(pen='r', name='box_loss')
-        self._cls_loss_curve = self._loss_plot.plot(pen='g', name='cls_loss')
-        self._dfl_loss_curve = self._loss_plot.plot(pen='b', name='dfl_loss')
-        self._loss_data = {'box': [], 'cls': [], 'dfl': []}
-        layout.addWidget(self._loss_plot)
+        # Save location info
+        from .detection_backend import _models_dir
+        save_info = QtWidgets.QLabel(
+            f'<small>Models are saved to: <code>{_models_dir()}</code></small>')
+        save_info.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        save_info.setWordWrap(True)
+        top_layout.addWidget(save_info)
 
         # Progress + buttons
         self._train_progress = QtWidgets.QProgressBar()
         self._train_progress.setVisible(False)
-        layout.addWidget(self._train_progress)
+        top_layout.addWidget(self._train_progress)
 
         self._train_status = QtWidgets.QLabel('')
-        layout.addWidget(self._train_status)
+        self._train_status.setWordWrap(True)
+        top_layout.addWidget(self._train_status)
 
         btn_row = QtWidgets.QHBoxLayout()
         self._btn_train = QtWidgets.QPushButton('Train')
@@ -422,7 +428,62 @@ class ObjectDetectionDialog(QtWidgets.QDialog):
         btn_row.addWidget(self._btn_stop_train)
         layout.addLayout(btn_row)
 
+        # Loss plot
+        self._loss_plot = pg.PlotWidget(title='Training Loss')
+        self._loss_plot.setLabel('bottom', 'Epoch')
+        self._loss_plot.setLabel('left', 'Loss')
+        self._loss_plot.addLegend()
+        self._box_loss_curve = self._loss_plot.plot(pen='r', name='box_loss')
+        self._cls_loss_curve = self._loss_plot.plot(pen='g', name='cls_loss')
+        self._dfl_loss_curve = self._loss_plot.plot(pen='b', name='dfl_loss')
+        self._loss_data = {'box': [], 'cls': [], 'dfl': []}
+        top_layout.addWidget(self._loss_plot)
+
+        splitter.addWidget(top_widget)
+
+        # --- Bottom: Saved Models ---
+        bottom_widget = QtWidgets.QWidget()
+        bottom_layout = QtWidgets.QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+
+        header_row = QtWidgets.QHBoxLayout()
+        header_row.addWidget(QtWidgets.QLabel(
+            '<b>Saved Models</b>'))
+        header_row.addStretch()
+        btn_open_folder = QtWidgets.QPushButton('Open Models Folder')
+        btn_open_folder.clicked.connect(self._open_models_folder)
+        header_row.addWidget(btn_open_folder)
+        btn_refresh_saved = QtWidgets.QPushButton('Refresh')
+        btn_refresh_saved.clicked.connect(self._refresh_saved_models)
+        header_row.addWidget(btn_refresh_saved)
+        bottom_layout.addLayout(header_row)
+
+        self._saved_models_list = QtWidgets.QListWidget()
+        bottom_layout.addWidget(self._saved_models_list)
+
+        model_btn_row = QtWidgets.QHBoxLayout()
+        btn_copy = QtWidgets.QPushButton('Save Copy As...')
+        btn_copy.setToolTip('Save a copy of the selected model to a custom location')
+        btn_copy.clicked.connect(self._save_model_copy)
+        model_btn_row.addWidget(btn_copy)
+        btn_load_ext = QtWidgets.QPushButton('Import Model...')
+        btn_load_ext.setToolTip('Import a .pt model file into the flika models folder')
+        btn_load_ext.clicked.connect(self._import_model)
+        model_btn_row.addWidget(btn_load_ext)
+        btn_delete = QtWidgets.QPushButton('Delete')
+        btn_delete.setToolTip('Delete the selected model')
+        btn_delete.clicked.connect(self._delete_saved_model)
+        model_btn_row.addWidget(btn_delete)
+        bottom_layout.addLayout(model_btn_row)
+
+        splitter.addWidget(bottom_widget)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+
+        layout.addWidget(splitter)
+
         self._refresh_models()
+        self._refresh_saved_models()
         return tab
 
     # -----------------------------------------------------------------------
@@ -938,8 +999,10 @@ class ObjectDetectionDialog(QtWidgets.QDialog):
         self._btn_train.setEnabled(True)
         self._btn_stop_train.setEnabled(False)
         self._train_progress.setVisible(False)
-        self._train_status.setText(f'Training complete! Model saved to:\n{model_path}')
+        self._train_status.setText(
+            f'Training complete! Model saved to:\n{model_path}')
         self._refresh_models()
+        self._refresh_saved_models()
 
     def _on_train_error(self, msg: str):
         self._btn_train.setEnabled(True)
@@ -947,3 +1010,101 @@ class ObjectDetectionDialog(QtWidgets.QDialog):
         self._train_progress.setVisible(False)
         self._train_status.setText(f'Error: {msg}')
         logger.error("Training error: %s", msg)
+
+    # -----------------------------------------------------------------------
+    # Saved Models management
+    # -----------------------------------------------------------------------
+
+    def _refresh_saved_models(self):
+        """Populate the saved models list from ~/.FLIKA/models/detectors/."""
+        self._saved_models_list.clear()
+        from .detection_backend import _models_dir
+        models_path = _models_dir()
+        if not os.path.isdir(models_path):
+            return
+        for fname in sorted(os.listdir(models_path)):
+            if not fname.endswith('.pt'):
+                continue
+            full = os.path.join(models_path, fname)
+            size_mb = os.path.getsize(full) / (1024 * 1024)
+            import time as _time
+            mtime = _time.strftime(
+                '%Y-%m-%d %H:%M',
+                _time.localtime(os.path.getmtime(full)))
+            item = QtWidgets.QListWidgetItem(
+                f'{fname}  ({size_mb:.1f} MB, {mtime})')
+            item.setData(QtCore.Qt.UserRole, full)
+            item.setToolTip(full)
+            self._saved_models_list.addItem(item)
+
+    def _open_models_folder(self):
+        from .detection_backend import _models_dir
+        QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl.fromLocalFile(_models_dir()))
+
+    def _save_model_copy(self):
+        """Save a copy of the selected model to a user-chosen location."""
+        item = self._saved_models_list.currentItem()
+        if item is None:
+            g.alert('Select a model from the list first.')
+            return
+        src = item.data(QtCore.Qt.UserRole)
+        if not os.path.isfile(src):
+            g.alert('Model file not found.')
+            return
+        dst, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, 'Save Model Copy',
+            os.path.basename(src),
+            'PyTorch Models (*.pt);;All Files (*)')
+        if dst:
+            import shutil
+            shutil.copy2(src, dst)
+            g.alert(f'Model saved to:\n{dst}')
+
+    def _import_model(self):
+        """Import an external .pt model into the flika models folder."""
+        src, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Import Model',
+            '', 'PyTorch Models (*.pt);;All Files (*)')
+        if not src:
+            return
+        from .detection_backend import _models_dir
+        import shutil
+        dst = os.path.join(_models_dir(), os.path.basename(src))
+        if os.path.exists(dst):
+            reply = QtWidgets.QMessageBox.question(
+                self, 'Overwrite?',
+                f'A model named "{os.path.basename(src)}" already exists.\n'
+                'Overwrite it?',
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No)
+            if reply != QtWidgets.QMessageBox.Yes:
+                return
+        shutil.copy2(src, dst)
+        self._refresh_saved_models()
+        self._refresh_models()
+        g.alert(f'Model imported to:\n{dst}')
+
+    def _delete_saved_model(self):
+        """Delete the selected saved model."""
+        item = self._saved_models_list.currentItem()
+        if item is None:
+            g.alert('Select a model from the list first.')
+            return
+        path = item.data(QtCore.Qt.UserRole)
+        fname = os.path.basename(path)
+        reply = QtWidgets.QMessageBox.question(
+            self, 'Delete Model',
+            f'Are you sure you want to delete "{fname}"?\n\n'
+            'This cannot be undone.',
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No)
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        try:
+            os.remove(path)
+        except OSError as e:
+            g.alert(f'Failed to delete model:\n{e}')
+            return
+        self._refresh_saved_models()
+        self._refresh_models()

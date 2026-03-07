@@ -129,6 +129,45 @@ class DetectionBackend(ABC):
         """Return class names from the loaded model."""
 
 
+def _models_dir() -> str:
+    """Return the flika models directory for detectors, creating it if needed."""
+    d = os.path.join(os.path.expanduser('~'), '.FLIKA', 'models', 'detectors')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _configure_ultralytics():
+    """Point Ultralytics cache/models dir to ~/.FLIKA/models/detectors/.
+
+    This prevents model weights from being downloaded into the current
+    working directory.
+    """
+    try:
+        from ultralytics import settings as ul_settings
+        models_path = _models_dir()
+        ul_settings.update({'weights_dir': models_path})
+    except Exception:
+        pass
+
+
+def _resolve_model_path(path_or_name: str) -> str:
+    """Resolve a model name like 'yolov8n.pt' to a full path.
+
+    If *path_or_name* is already an absolute path that exists, return it.
+    Otherwise check ~/.FLIKA/models/detectors/ first, then fall back to
+    the bare name (which lets ultralytics download it).
+    """
+    if os.path.isabs(path_or_name) and os.path.isfile(path_or_name):
+        return path_or_name
+
+    # Check flika model cache
+    cached = os.path.join(_models_dir(), os.path.basename(path_or_name))
+    if os.path.isfile(cached):
+        return cached
+
+    return path_or_name
+
+
 class UltralyticsBackend(DetectionBackend):
     """Object detection using Ultralytics YOLO (v8/v11)."""
 
@@ -141,11 +180,19 @@ class UltralyticsBackend(DetectionBackend):
 
     def _ensure_model(self, config: DetectionConfig):
         """Load or reload the YOLO model based on config."""
-        path = config.model_path or f'yolov8{config.model_size}.pt'
+        raw_path = config.model_path or f'yolov8{config.model_size}.pt'
+        path = _resolve_model_path(raw_path)
         if self._model is not None and self._model_path == path:
             return
         from ultralytics import YOLO
-        self._model = YOLO(path)
+        _configure_ultralytics()
+        # Change to the models dir so any download lands there
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(_models_dir())
+            self._model = YOLO(path)
+        finally:
+            os.chdir(old_cwd)
         self._model_path = path
         logger.info("Loaded YOLO model: %s", path)
 
@@ -254,11 +301,11 @@ class UltralyticsBackend(DetectionBackend):
     def train(self, data_yaml: str, config: DetectionConfig,
               callback: Optional[Callable] = None) -> str:
         from ultralytics import YOLO
+        _configure_ultralytics()
 
         model = YOLO(f'yolov8{config.model_size}.yaml')
         device = self._get_device(config)
-        save_dir = os.path.join(os.path.expanduser('~'), '.FLIKA', 'models', 'detectors')
-        os.makedirs(save_dir, exist_ok=True)
+        save_dir = _models_dir()
 
         results = model.train(
             data=data_yaml,
@@ -283,12 +330,12 @@ class UltralyticsBackend(DetectionBackend):
     def fine_tune(self, data_yaml: str, config: DetectionConfig,
                   callback: Optional[Callable] = None) -> str:
         from ultralytics import YOLO
+        _configure_ultralytics()
 
-        base_path = config.model_path or f'yolov8{config.model_size}.pt'
+        base_path = _resolve_model_path(config.model_path or f'yolov8{config.model_size}.pt')
         model = YOLO(base_path)
         device = self._get_device(config)
-        save_dir = os.path.join(os.path.expanduser('~'), '.FLIKA', 'models', 'detectors')
-        os.makedirs(save_dir, exist_ok=True)
+        save_dir = _models_dir()
 
         results = model.train(
             data=data_yaml,
@@ -313,8 +360,10 @@ class UltralyticsBackend(DetectionBackend):
 
     def load_model(self, path: str) -> None:
         from ultralytics import YOLO
-        self._model = YOLO(path)
-        self._model_path = path
+        _configure_ultralytics()
+        resolved = _resolve_model_path(path)
+        self._model = YOLO(resolved)
+        self._model_path = resolved
 
     def available_models(self) -> List[dict]:
         models = []
