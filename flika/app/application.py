@@ -316,8 +316,9 @@ class FlikaApplication(QtWidgets.QMainWindow):
         aiMenu.addAction("BioImage.IO Model Zoo", self._ai_model_zoo)
 
         helpMenu = self.menuBar().addMenu("Help")
+        helpMenu.addAction("Documentation", self._show_documentation)
         url = 'http://flika-org.github.io'
-        helpMenu.addAction("Documentation", lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(url)))
+        helpMenu.addAction("Online Documentation", lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(url)))
         helpMenu.addAction("Check For Updates", checkUpdates)
         helpMenu.addSeparator()
         helpMenu.addAction("Check Core Dependencies", self._check_core_deps)
@@ -398,6 +399,10 @@ class FlikaApplication(QtWidgets.QMainWindow):
     def _show_figure_composer(self):
         from ..viewers.figure_composer import show_figure_composer
         show_figure_composer(parent=self)
+
+    def _show_documentation(self):
+        from .doc_browser import show_documentation
+        show_documentation(parent=self)
 
     def _check_core_deps(self):
         from .dependency_checker import CoreDependencyDialog

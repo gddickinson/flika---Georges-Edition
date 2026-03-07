@@ -136,7 +136,7 @@ def _scan_plugin_dependencies():
     if not os.path.isdir(plugins_dir):
         return {}
 
-    skip_dirs = {"NOT_WORKING", "OLD", "EXPERIMENTAL", "__pycache__"}
+    skip_dirs = {"NOT_WORKING", "NOT_WORKING_WITH_PY311", "OLD", "EXPERIMENTAL", "backups", "__pycache__"}
     results = {}
 
     for name in sorted(os.listdir(plugins_dir)):
@@ -150,9 +150,12 @@ def _scan_plugin_dependencies():
             root = tree.getroot()
             deps = []
             for dep in root.iter("dependency"):
-                text = (dep.text or "").strip()
-                if text:
-                    deps.append(text)
+                # Support both <dependency name='pkg'/> and <dependency>pkg</dependency>
+                dep_name = dep.get("name", "").strip()
+                if not dep_name:
+                    dep_name = (dep.text or "").strip()
+                if dep_name:
+                    deps.append(dep_name)
             if deps:
                 results[name] = deps
         except Exception:
