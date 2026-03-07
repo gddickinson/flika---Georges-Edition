@@ -181,15 +181,57 @@ Adjustable opacity lets you blend the foreground and background.
 
 ### Timestamp
 
-Burns a timestamp overlay onto each frame of the stack. Configure the time format,
-position, font size, and frame interval.
+Adds a timestamp overlay to each frame of the stack. The frame rate auto-populates from
+the `frame_interval` setting (1 / interval = Hz), but can be manually overridden.
+
+| Option | Description |
+|---|---|
+| **Frame Rate (Hz)** | Auto-populated from `frame_interval` setting; manually adjustable |
+| **Font Size (pt)** | Text size, 4-120 points |
+| **Text Color** | 8 presets (White, Black, Yellow, Green, Red, Cyan, Magenta) + custom color picker |
+| **Background Color** | None, Black, White, Semi-transparent Black/White, or custom |
+| **Location** | Lower Right, Lower Left, Upper Right, Upper Left |
+| **Bold** | Bold text rendering |
+| **Show Frame Number** | Appends `[F123]` frame counter |
+| **Custom Format** | Format string with placeholders: `{time}`, `{frame}`, `{ms}`, `{s}`, `{min}`, `{hr}` |
+| **Show** | Toggle visibility on/off |
+
+Time is auto-formatted with appropriate units (ms for < 1s, seconds, minutes, hours).
+
+```python
+from flika.process.overlay import time_stamp
+time_stamp(framerate=20.0, font_size=14, color='Yellow', location='Upper Left')
+```
 
 ### Scale Bar
 
-Adds a scale bar overlay to the image. Configure:
-- Length in physical units (micrometers)
-- Pixel size calibration
-- Position, color, and font
+Adds a scale bar overlay to the image. The bar width auto-calculates from the `pixel_size`
+setting (nm) and rounds to a "nice" number (1, 2, 5, 10, 20, 50, ...).
+
+| Option | Description |
+|---|---|
+| **Physical Width** | Bar length in physical units; auto-calculated from pixel_size setting |
+| **Unit** | Display unit: um, nm, mm, or px |
+| **Width (pixels)** | Bar length in image pixels; linked to physical width via pixel_size |
+| **Bar Thickness (px)** | Bar height in pixels (1-100) |
+| **Font Size (pt)** | Label text size |
+| **Bold Label** | Bold label text |
+| **Label Color** | 8 presets + custom color picker |
+| **Bar Color** | Separate color for the bar itself |
+| **Background** | Label background: None, Black, White, Semi-transparent, or custom |
+| **Location** | 4-corner placement |
+| **Show Label** | Toggle the text label above the bar |
+| **Custom Label** | Override auto-generated label text |
+| **Horizontal/Vertical Offset** | Fine-tune position from the corner |
+
+Physical width and pixel width are linked: changing one auto-updates the other based
+on the pixel_size setting.
+
+```python
+from flika.process.overlay import scale_bar
+scale_bar(width_um=10.0, width_pixels=93, font_size=12, color='White',
+          location='Lower Right', bar_color='White', bar_height=4)
+```
 
 ### Track Overlay
 

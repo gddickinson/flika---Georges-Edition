@@ -182,6 +182,26 @@ Or use Xvfb:
 xvfb-run python my_script.py
 ```
 
+## API Key Issues
+
+### Key Not Found
+
+If AI features report "No API key found":
+
+1. Open **File > Settings** and enter your Anthropic API key
+2. The key is stored in the system keyring (macOS Keychain / Windows Credential Manager)
+3. Alternatively, set the environment variable: `export ANTHROPIC_API_KEY=sk-...`
+
+### Removing the API Key
+
+Use the **Delete API Key** button in Settings to securely remove the key from the
+system keyring. This is recommended before sharing your machine or environment.
+
+### Legacy Plaintext Keys
+
+If you previously stored an API key in `settings.json`, it will be automatically
+migrated to the system keyring on next access and removed from the JSON file.
+
 ## Logging
 
 Flika logs to `~/.FLIKA/logs/`. Enable debug logging for detailed diagnostics:
@@ -189,6 +209,10 @@ Flika logs to `~/.FLIKA/logs/`. Enable debug logging for detailed diagnostics:
 ```python
 g.settings['debug_mode'] = True
 ```
+
+When debug mode is enabled, the flika logger is set to DEBUG level, providing verbose
+output including module loading, operation parameters, and timing information. When
+disabled, the logger reverts to WARNING level.
 
 Log files contain:
 - Startup sequence and module loading

@@ -164,6 +164,17 @@ and count particles") and the AI generates a working flika script.
 including `info.xml`, the main module, and menu integration. See [Plugins](plugins.md)
 for the plugin architecture.
 
+### API Key Security
+
+The Anthropic API key required for AI script/plugin generation is stored securely via
+the system keyring (macOS Keychain / Windows Credential Manager / Linux Secret Service).
+The key is **never** stored in plaintext in `settings.json`.
+
+- Set the key in **File > Settings** (API Key field)
+- Delete the key with the **Delete API Key** button
+- Legacy plaintext keys are automatically migrated to the keyring on first access
+- The key is never included in exported settings or provenance files
+
 ## GPU Acceleration
 
 AI tools benefit significantly from GPU acceleration. Check your GPU status via

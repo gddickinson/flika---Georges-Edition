@@ -211,6 +211,48 @@ Single Particle Tracking operations. See [SPT Guide](spt_guide.md) for full docu
 | **Link Particles** | Links detected particles into tracks across frames. |
 | **Results Table** | Opens the SPT results table dock. |
 
+## Background Subtraction
+
+**Process > Background Subtraction** removes background signal from image stacks using
+one of three methods:
+
+### Manual ROI
+
+Uses the currently drawn ROI(s) to define background regions. The mean intensity within
+the ROI is computed and subtracted from each pixel.
+
+### Auto ROI
+
+Automatically detects a background region using the dark-corner algorithm (ported from
+the spt_batch_analysis plugin). Divides the image into quadrants, selects the dimmest
+corner, and uses a region there as background. The detected region is drawn on the window
+for verification.
+
+### Statistical
+
+Computes a background value from each frame's pixel distribution:
+
+| Method | Description |
+|---|---|
+| **Mean** | Mean of all pixels |
+| **Median** | Median of all pixels |
+| **Mode** | Most frequent pixel value (histogram peak) |
+| **5th Percentile** | Conservative estimate for sparse signals |
+| **25th Percentile** | First quartile |
+
+### Options
+
+- **Per-frame** -- computes and subtracts a separate background for each frame
+- **Whole-stack** -- computes a single background from the average projection
+
+```python
+from flika.process.background_sub import background_subtract
+# Auto ROI, per-frame
+background_subtract(method='Auto ROI', scope='Per Frame')
+# Statistical median, whole stack
+background_subtract(method='Statistical', stat_method='Median', scope='Whole Stack')
+```
+
 ## Export Video
 
 **Process > Export Video** exports the current stack as an MP4 video file. Configure

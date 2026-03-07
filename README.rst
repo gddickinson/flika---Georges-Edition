@@ -1,6 +1,8 @@
 flika v0.3.0
 ============
 
+.. image:: flika/docs/_static/img/flika_screenshot.png
+
 .. image:: flika/docs/_static/img/flika_screencapture.gif
 
 **flika** is an interactive image processing program for biologists written in
@@ -24,7 +26,11 @@ Modernization & Platform
 - **Structured macro recorder** with provenance export
   (JSON, OME companion, REMBI metadata).
 - **Dependency checker** -- warns at startup about missing optional packages
-  instead of crashing.
+  instead of crashing.  Plugin ``info.xml`` files declare dependencies via
+  ``<dependency name="pkg"/>`` tags.
+- **Built-in documentation browser** (``Help > Documentation``) -- renders
+  comprehensive markdown-based user manuals with sidebar TOC, search, and
+  navigation history.
 
 4-D & Multi-Channel Data
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -54,7 +60,8 @@ GPU & Acceleration
 
 - **Device abstraction** (``flika/utils/accel.py``) -- auto-detects CUDA, MPS
   (Apple Silicon), or CPU; configurable in Settings.
-- **GPU memory limit** setting to prevent OOM.
+- **GPU memory limit** setting -- arrays exceeding the limit stay on CPU to
+  prevent OOM.
 - Accelerated filters via CuPy/Numba/Torch when available.
 
 AI Ecosystem
@@ -70,7 +77,10 @@ AI Ecosystem
 - **Segmentation** -- Cellpose, StarDist, micro-SAM wrappers.
 - **PSF Simulator** -- generate synthetic PSFs for calibration.
 - **AI Plugin Generator** -- prototype flika plugins from natural-language
-  descriptions (requires Anthropic API key in Settings).
+  descriptions (requires Anthropic API key).
+- **Secure API key storage** -- Anthropic API key stored via system keyring
+  (macOS Keychain / Windows Credential Manager / Linux Secret Service),
+  never in plaintext settings files.
 
 Single-Particle Tracking (SPT)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -115,6 +125,20 @@ ROI & Measurement Tools
 - **ROI histogram** and **line-profile** viewers.
 - **Volume viewer** for 3-D rendering.
 
+Image Processing
+~~~~~~~~~~~~~~~~
+
+- **Background Subtraction** (``Process > Background Subtraction``) -- three
+  methods: manual ROI, auto-detected ROI (dark-corner algorithm from
+  spt_batch_analysis), and statistical (mean/median/mode/percentile).
+  Supports per-frame or whole-stack subtraction.
+- **Enhanced Overlays** -- Timestamp and Scale Bar overlays auto-populate from
+  ``pixel_size`` and ``frame_interval`` settings.  Full customization:
+  font size, 8 preset colors + custom color picker, background colors,
+  location (4 corners), bold text, custom format strings.  Scale bar supports
+  linked physical/pixel width, unit selection (um/nm/mm/px), bar thickness,
+  separate bar and label colors, and nice-number rounding.
+
 Publication & Reproducibility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -122,16 +146,19 @@ Publication & Reproducibility
   figure builder with PNG / SVG / PDF export.
 - **Workflow templates** -- save and replay processing pipelines.
 - **Provenance** -- full processing history exportable as JSON with
-  OME-companion and REMBI metadata support.
+  OME-companion and REMBI metadata support.  Auto-export on save via
+  ``auto_export_provenance`` setting.
 - **REMBI metadata editor**.
 
 Settings & Usability
 ~~~~~~~~~~~~~~~~~~~~~
 
-- **Pixel size** and **frame interval** in Settings (used by SPT, export,
-  diffusion analysis).
-- **Default axis order** preference for TIFF import.
-- **Anthropic API key** field for AI features.
+- **26 settings**, all verified operational, accessible via ``File > Settings``:
+  pixel size, frame interval, acceleration device, GPU memory limit, debug mode,
+  auto-export provenance, ROI colors/sizes, point settings, axis order, and more.
+- **Debug mode** -- toggles logger to DEBUG level for detailed diagnostics.
+- **Built-in documentation** with 14 comprehensive user manual pages.
+- **Secure credential storage** via system keyring with "Delete API Key" button.
 
 
 Credits
@@ -222,7 +249,9 @@ Website
 
 Documentation
 -------------
-`flika-org.github.io/contents.html <http://flika-org.github.io/contents.html>`_
+Built-in: **Help > Documentation** in the application.
+
+Online: `flika-org.github.io/contents.html <http://flika-org.github.io/contents.html>`_
 
 Install
 -------

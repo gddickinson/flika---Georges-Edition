@@ -57,6 +57,8 @@ Optional dependencies for specific features:
 | h5py | HDF5 file support |
 | bioformats | BioFormats file support |
 | napari | napari interoperability |
+| keyring | Secure API key storage (macOS Keychain, Windows Credential Manager) |
+| markdown | Built-in documentation browser rendering |
 
 ## Launching Flika
 

@@ -10,6 +10,9 @@ Major update with new features and modernized platform support.
 * Undo / redo system for all image-processing operations
 * Structured macro recorder with provenance export
 * Dependency checker for optional packages
+* Built-in documentation browser (Help > Documentation) with 14 user manual
+  pages, sidebar TOC, search, and navigation history
+* Plugin info.xml dependency declarations for automated dependency checking
 
 **4-D & Multi-Channel:**
 
@@ -27,7 +30,7 @@ Major update with new features and modernized platform support.
 **GPU & Acceleration:**
 
 * Device abstraction (auto-detect CUDA / MPS / CPU)
-* GPU memory limit setting
+* GPU memory limit setting (arrays exceeding limit stay on CPU)
 * Accelerated filters via CuPy / Numba / Torch
 
 **AI Ecosystem:**
@@ -39,6 +42,9 @@ Major update with new features and modernized platform support.
 * Cellpose, StarDist, micro-SAM segmentation wrappers
 * PSF Simulator
 * AI Plugin Generator (Anthropic API)
+* Secure API key storage via system keyring (macOS Keychain, Windows Credential
+  Manager, Linux Secret Service) -- never stored in plaintext settings
+* "Delete API Key" button for secure credential removal
 
 **Single-Particle Tracking:**
 
@@ -61,19 +67,35 @@ Major update with new features and modernized platform support.
 * ROI histogram and line-profile viewers
 * Volume viewer for 3-D rendering
 
+**Image Processing:**
+
+* Background Subtraction (Process > Background Subtraction) with three methods:
+  manual ROI, auto-detected ROI (dark-corner algorithm), and statistical
+  (mean/median/mode/percentile); per-frame or whole-stack
+* Enhanced Timestamp overlay: auto-populates from frame_interval setting;
+  font size, 8 preset + custom colors, background colors, 4-corner placement,
+  bold text, show frame number, custom format strings with placeholders
+* Enhanced Scale Bar overlay: auto-populates from pixel_size setting; linked
+  physical/pixel width, unit selection (um/nm/mm/px), bar thickness, separate
+  bar and label colors, bold text, nice-number rounding, offset controls
+
 **Publication & Reproducibility:**
 
 * Figure Composer (grid layout, PNG/SVG/PDF export)
 * Workflow templates
 * Provenance export (JSON, OME companion, REMBI metadata)
+* Auto-export provenance setting (saves sidecar JSON on each file save)
 * REMBI metadata editor
 
 **Settings:**
 
+* 26 settings, all verified operational
 * Pixel size and frame interval in Settings
 * Default axis order for TIFF import
-* Anthropic API key field for AI features
-* Acceleration device and GPU memory limit settings
+* Debug mode now toggles logger to DEBUG level
+* GPU memory limit enforced in should_use_gpu()
+* Auto-export provenance setting with UI checkbox
+* Secure Anthropic API key field with keyring storage
 
 
 0.2.17

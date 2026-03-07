@@ -76,6 +76,18 @@ Flika is organized around a few core concepts:
 - **ROIs** -- Regions of interest are drawn on windows and can generate time traces, measurements, and masks.
 - **Metadata** -- Each window carries a `metadata` dict for file info, SPT data, provenance, and more.
 
+## Recent Highlights
+
+- **Background Subtraction** -- manual ROI, auto-detected ROI, and statistical methods
+  (mean/median/mode/percentile) with per-frame or whole-stack options
+- **Enhanced Overlays** -- timestamp and scale bar auto-populate from pixel_size and
+  frame_interval settings; full customization (colors, fonts, locations, formats)
+- **Secure API Key Storage** -- Anthropic API key stored via system keyring, never in
+  plaintext; "Delete API Key" button for secure removal
+- **Built-in Documentation** -- Help > Documentation opens a searchable manual browser
+- **All 26 Settings Verified** -- debug mode, GPU memory limit, and auto-export
+  provenance are now fully operational
+
 ## User Data Directory
 
 Flika stores user data in `~/.FLIKA/`:

@@ -140,25 +140,61 @@ to annotate images with standardized metadata fields for reproducibility and dat
 
 ## Settings
 
-**File > Settings** opens the settings editor where you can configure:
+**File > Settings** opens the settings editor where you can configure all 26 operational
+settings. Settings are stored in `~/.FLIKA/settings.json` and persist across sessions.
+
+### General
 
 | Setting | Description |
 |---|---|
 | Internal Data Type | Default dtype for new images (float64) |
 | Multiprocessing | Enable/disable parallel processing |
 | Number of Cores | CPU cores for parallel operations |
+| Default Axis Order | Auto/TXYZ/TXYC/TZXY for TIFF import |
+| Debug Mode | Toggles logger to DEBUG level for detailed diagnostics |
+
+### ROI
+
+| Setting | Description |
+|---|---|
 | Mouse Mode | Default ROI drawing tool |
 | ROI Color | Default color for new ROIs |
 | Point Color | Default color for point ROIs |
 | Point Size | Size of point ROI markers |
 | Rectangle Width/Height | Default dimensions for rectangle ROIs |
-| Pixel Size | Physical pixel size in nm (for scale bars) |
-| Frame Interval | Time between frames in seconds |
-| Acceleration Device | Auto/CPU/GPU for accelerated operations |
-| GPU Memory Limit | Maximum GPU memory usage (0 = unlimited) |
-| Auto Export Provenance | Automatically save provenance on each operation |
+| Show All Points | Display all point ROIs across frames |
+| Default ROI on Click | Automatically create ROI on image click |
+| Apply to All Planes | Apply ROI operations across Z/C planes |
 
-Settings are stored in `~/.FLIKA/settings.json` and persist across sessions.
+### Calibration
+
+| Setting | Description |
+|---|---|
+| Pixel Size (nm) | Physical pixel size; used by scale bar, SPT, diffusion analysis |
+| Frame Interval (s) | Time between frames; used by timestamp overlay, SPT |
+
+### Acceleration
+
+| Setting | Description |
+|---|---|
+| Acceleration Device | Auto/CPU/CUDA/MPS for GPU operations |
+| GPU Memory Limit (MB) | Arrays exceeding this limit stay on CPU (0 = unlimited) |
+
+### Reproducibility
+
+| Setting | Description |
+|---|---|
+| Auto Export Provenance | Saves a JSON provenance sidecar file on every file save |
+
+### AI / API Key
+
+The Anthropic API key (for AI Plugin Generator and AI Script Generator) is stored
+securely via the system keyring (macOS Keychain, Windows Credential Manager, Linux
+Secret Service). The key is **never** stored in plaintext in `settings.json`.
+
+- Enter/update the key in **File > Settings > API Key**
+- **Delete API Key** button securely removes the key from the system keyring
+- Legacy plaintext keys are automatically migrated to the keyring on startup
 
 ## Console
 
