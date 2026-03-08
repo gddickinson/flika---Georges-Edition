@@ -36,12 +36,62 @@ def _make_int_spin(value, lo, hi, suffix=''):
 
 
 # ---------------------------------------------------------------------------
+# Collapsible group helper
+# ---------------------------------------------------------------------------
+
+class _CollapsibleSection(QtWidgets.QWidget):
+    """A section with a toggle button that shows/hides its contents."""
+
+    def __init__(self, title, parent=None, expanded=False):
+        super().__init__(parent)
+        self._toggle = QtWidgets.QToolButton()
+        self._toggle.setStyleSheet("QToolButton { border: none; }")
+        self._toggle.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._toggle.setArrowType(QtCore.Qt.ArrowType.RightArrow)
+        self._toggle.setText(title)
+        self._toggle.setCheckable(True)
+        self._toggle.setChecked(False)
+        self._toggle.toggled.connect(self._on_toggle)
+
+        self._content = QtWidgets.QWidget()
+        self._content.setVisible(False)
+        self._content_layout = QtWidgets.QFormLayout(self._content)
+        self._content_layout.setFieldGrowthPolicy(
+            QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._content_layout.setSpacing(4)
+        self._content_layout.setContentsMargins(12, 4, 4, 4)
+
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self._toggle)
+        lay.addWidget(self._content)
+
+        if expanded:
+            self._toggle.setChecked(True)
+
+    def _on_toggle(self, checked):
+        self._toggle.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow if checked
+            else QtCore.Qt.ArrowType.RightArrow)
+        self._content.setVisible(checked)
+
+    def addRow(self, label, widget):
+        self._content_layout.addRow(label, widget)
+
+    def addWidget(self, widget):
+        self._content_layout.addRow(widget)
+
+
+# ---------------------------------------------------------------------------
 # ThunderSTORM controls
 # ---------------------------------------------------------------------------
 
 class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
     """Full ThunderSTORM detection parameter controls.
 
+    All option groups are collapsible to save screen space.
     Exposes all filter, detector, fitter, camera, and post-processing
     parameters matching the original ThunderSTORM ImageJ plugin
     (Ovesny et al., 2014).
@@ -68,118 +118,112 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
 
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setSpacing(4)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(2)
+        layout.setContentsMargins(4, 4, 4, 4)
 
         # ==================================================================
-        # Image Filter
+        # Image Filter (collapsible)
         # ==================================================================
-        filter_group = QtWidgets.QGroupBox("Image Filter")
-        fl = QtWidgets.QFormLayout(filter_group)
-        fl.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        sec_filter = _CollapsibleSection("Image Filter")
 
         self.filter_type = QtWidgets.QComboBox()
         self.filter_type.addItems([
             'wavelet', 'gaussian', 'dog', 'lowered_gaussian',
             'difference_of_averaging', 'median', 'box', 'none',
             'wavelet+gaussian', 'wavelet+dog', 'wavelet+median'])
-        fl.addRow("Filter type:", self.filter_type)
+        sec_filter.addRow("Filter type:", self.filter_type)
 
         # -- Wavelet params --
         self.wavelet_scale = _make_int_spin(2, 1, 5)
         self.wavelet_scale.setToolTip("B-spline wavelet scale (1-5)")
-        fl.addRow("Wavelet scale:", self.wavelet_scale)
+        sec_filter.addRow("Wavelet scale:", self.wavelet_scale)
 
         self.wavelet_order = _make_int_spin(3, 1, 5)
         self.wavelet_order.setToolTip(
             "B-spline order (3 = cubic, default)")
-        fl.addRow("Wavelet B-spline order:", self.wavelet_order)
+        sec_filter.addRow("Wavelet B-spline order:", self.wavelet_order)
 
         # -- Gaussian params --
         self.gauss_sigma = _make_double_spin(1.6, 0.1, 10.0, decimals=2,
                                               step=0.1, suffix=' px')
         self.gauss_sigma.setToolTip("Gaussian kernel sigma")
-        fl.addRow("Gaussian sigma:", self.gauss_sigma)
+        sec_filter.addRow("Gaussian sigma:", self.gauss_sigma)
 
         # -- DoG params --
         self.dog_sigma1 = _make_double_spin(1.0, 0.1, 10.0, decimals=2,
                                               step=0.1, suffix=' px')
         self.dog_sigma1.setToolTip("Narrow Gaussian sigma for DoG")
-        fl.addRow("DoG sigma 1:", self.dog_sigma1)
+        sec_filter.addRow("DoG sigma 1:", self.dog_sigma1)
 
         self.dog_sigma2 = _make_double_spin(1.6, 0.1, 20.0, decimals=2,
                                               step=0.1, suffix=' px')
         self.dog_sigma2.setToolTip("Wide Gaussian sigma for DoG")
-        fl.addRow("DoG sigma 2:", self.dog_sigma2)
+        sec_filter.addRow("DoG sigma 2:", self.dog_sigma2)
 
         # -- Lowered Gaussian params --
         self.lowered_sigma = _make_double_spin(1.6, 0.1, 10.0, decimals=2,
                                                 step=0.1, suffix=' px')
         self.lowered_sigma.setToolTip(
             "Gaussian sigma for lowered Gaussian filter")
-        fl.addRow("Lowered Gauss sigma:", self.lowered_sigma)
+        sec_filter.addRow("Lowered Gauss sigma:", self.lowered_sigma)
 
         self.lowered_size = _make_int_spin(3, 1, 21, suffix=' px')
         self.lowered_size.setToolTip(
             "Averaging kernel size for lowered Gaussian")
-        fl.addRow("Lowered avg size:", self.lowered_size)
+        sec_filter.addRow("Lowered avg size:", self.lowered_size)
 
         # -- Difference of averaging params --
         self.diff_avg_size1 = _make_int_spin(3, 1, 21, suffix=' px')
         self.diff_avg_size1.setToolTip("First box filter size")
-        fl.addRow("DiffAvg size 1:", self.diff_avg_size1)
+        sec_filter.addRow("DiffAvg size 1:", self.diff_avg_size1)
 
         self.diff_avg_size2 = _make_int_spin(5, 1, 41, suffix=' px')
         self.diff_avg_size2.setToolTip("Second box filter size")
-        fl.addRow("DiffAvg size 2:", self.diff_avg_size2)
+        sec_filter.addRow("DiffAvg size 2:", self.diff_avg_size2)
 
         # -- Median / Box size --
         self.median_size = _make_int_spin(3, 1, 21, suffix=' px')
         self.median_size.setToolTip("Median filter kernel size")
-        fl.addRow("Median size:", self.median_size)
+        sec_filter.addRow("Median size:", self.median_size)
 
         self.box_size = _make_int_spin(3, 1, 21, suffix=' px')
         self.box_size.setToolTip("Box (averaging) filter kernel size")
-        fl.addRow("Box size:", self.box_size)
+        sec_filter.addRow("Box size:", self.box_size)
 
         # -- Compound secondary filter params --
         self.compound_secondary_sigma = _make_double_spin(
             1.0, 0.1, 10.0, decimals=2, step=0.1, suffix=' px')
         self.compound_secondary_sigma.setToolTip(
             "Sigma for compound secondary Gaussian filter")
-        fl.addRow("Secondary sigma:", self.compound_secondary_sigma)
+        sec_filter.addRow("Secondary sigma:", self.compound_secondary_sigma)
 
         self.compound_secondary_size = _make_int_spin(3, 1, 21, suffix=' px')
         self.compound_secondary_size.setToolTip(
             "Kernel size for compound secondary median filter")
-        fl.addRow("Secondary size:", self.compound_secondary_size)
+        sec_filter.addRow("Secondary size:", self.compound_secondary_size)
 
         self.compound_secondary_sigma1 = _make_double_spin(
             1.0, 0.1, 10.0, decimals=2, step=0.1, suffix=' px')
         self.compound_secondary_sigma1.setToolTip(
             "Narrow sigma for compound secondary DoG")
-        fl.addRow("Secondary DoG σ1:", self.compound_secondary_sigma1)
+        sec_filter.addRow("Secondary DoG \u03c31:", self.compound_secondary_sigma1)
 
         self.compound_secondary_sigma2 = _make_double_spin(
             2.0, 0.1, 20.0, decimals=2, step=0.1, suffix=' px')
         self.compound_secondary_sigma2.setToolTip(
             "Wide sigma for compound secondary DoG")
-        fl.addRow("Secondary DoG σ2:", self.compound_secondary_sigma2)
+        sec_filter.addRow("Secondary DoG \u03c32:", self.compound_secondary_sigma2)
 
-        layout.addWidget(filter_group)
+        layout.addWidget(sec_filter)
 
         # ==================================================================
-        # Candidate Detector
+        # Candidate Detector (collapsible)
         # ==================================================================
-        det_group = QtWidgets.QGroupBox("Candidate Detector")
-        dl = QtWidgets.QFormLayout(det_group)
-        dl.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        sec_det = _CollapsibleSection("Candidate Detector")
 
         self.detector_type = QtWidgets.QComboBox()
         self.detector_type.addItems(['local_max', 'nms', 'centroid', 'grid'])
-        dl.addRow("Detector type:", self.detector_type)
+        sec_det.addRow("Detector type:", self.detector_type)
 
         self.threshold = QtWidgets.QComboBox()
         self.threshold.setEditable(True)
@@ -187,26 +231,26 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
             'std(Wave.F1)', '2*std(Wave.F1)', '3*std(Wave.F1)',
             'mean(Wave.F1)+std(Wave.F1)',
             'median(Wave.F1)+std(Wave.F1)'])
-        dl.addRow("Threshold:", self.threshold)
+        sec_det.addRow("Threshold:", self.threshold)
 
         # -- LocalMaximum params --
         self.lm_connectivity = QtWidgets.QComboBox()
         self.lm_connectivity.addItems(['8-neighbourhood', '4-neighbourhood'])
         self.lm_connectivity.setToolTip(
             "Pixel connectivity for local maximum detection")
-        dl.addRow("Connectivity:", self.lm_connectivity)
+        sec_det.addRow("Connectivity:", self.lm_connectivity)
 
         self.lm_min_distance = _make_int_spin(1, 1, 20, suffix=' px')
         self.lm_min_distance.setToolTip(
             "Minimum distance between detected peaks")
-        dl.addRow("Min distance:", self.lm_min_distance)
+        sec_det.addRow("Min distance:", self.lm_min_distance)
 
         # -- NMS params --
         self.nms_connectivity = QtWidgets.QComboBox()
         self.nms_connectivity.addItems(['2 (8-connected)', '1 (4-connected)'])
         self.nms_connectivity.setToolTip(
             "Connectivity for non-maximum suppression")
-        dl.addRow("NMS connectivity:", self.nms_connectivity)
+        sec_det.addRow("NMS connectivity:", self.nms_connectivity)
 
         # -- Centroid params --
         self.centroid_connectivity = QtWidgets.QComboBox()
@@ -214,111 +258,105 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
             ['2 (8-connected)', '1 (4-connected)'])
         self.centroid_connectivity.setToolTip(
             "Connected components connectivity")
-        dl.addRow("CC connectivity:", self.centroid_connectivity)
+        sec_det.addRow("CC connectivity:", self.centroid_connectivity)
 
-        self.centroid_min_area = _make_int_spin(1, 1, 100, suffix=' px²')
+        self.centroid_min_area = _make_int_spin(1, 1, 100, suffix=' px\u00b2')
         self.centroid_min_area.setToolTip(
             "Minimum connected component area")
-        dl.addRow("Min area:", self.centroid_min_area)
+        sec_det.addRow("Min area:", self.centroid_min_area)
 
         self.watershed_cb = QtWidgets.QCheckBox()
         self.watershed_cb.setChecked(True)
         self.watershed_cb.setToolTip(
             "Apply watershed segmentation to split touching peaks")
-        dl.addRow("Watershed:", self.watershed_cb)
+        sec_det.addRow("Watershed:", self.watershed_cb)
 
         # -- Grid params --
         self.grid_spacing = _make_int_spin(10, 2, 100, suffix=' px')
         self.grid_spacing.setToolTip("Grid spacing for grid detector")
-        dl.addRow("Grid spacing:", self.grid_spacing)
+        sec_det.addRow("Grid spacing:", self.grid_spacing)
 
         # -- Common detector params --
         self.exclude_border = _make_int_spin(3, 0, 50, suffix=' px')
         self.exclude_border.setToolTip(
             "Border exclusion width (0 = no exclusion)")
-        dl.addRow("Exclude border:", self.exclude_border)
+        sec_det.addRow("Exclude border:", self.exclude_border)
 
-        layout.addWidget(det_group)
+        layout.addWidget(sec_det)
 
         # ==================================================================
-        # Sub-pixel Fitting
+        # Sub-pixel Fitting (collapsible)
         # ==================================================================
-        fit_group = QtWidgets.QGroupBox("Sub-pixel Fitting")
-        ftl = QtWidgets.QFormLayout(fit_group)
-        ftl.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        sec_fit = _CollapsibleSection("Sub-pixel Fitting")
 
         self.fitter_type = QtWidgets.QComboBox()
         self.fitter_type.addItems([
             'gaussian_lsq', 'gaussian_wlsq', 'gaussian_mle',
             'elliptical_gaussian_mle', 'phasor', 'radial_symmetry',
             'centroid', 'multi_emitter'])
-        ftl.addRow("Fitter type:", self.fitter_type)
+        sec_fit.addRow("Fitter type:", self.fitter_type)
 
         self.fit_radius = _make_int_spin(3, 2, 10, suffix=' px')
         self.fit_radius.setToolTip(
-            "Fitting ROI half-width (ROI size = 2×radius + 1)")
-        ftl.addRow("Fit radius:", self.fit_radius)
+            "Fitting ROI half-width (ROI size = 2\u00d7radius + 1)")
+        sec_fit.addRow("Fit radius:", self.fit_radius)
 
         self.initial_sigma = _make_double_spin(1.3, 0.5, 5.0, decimals=2,
                                                 step=0.1, suffix=' px')
         self.initial_sigma.setToolTip("Initial PSF sigma estimate for fitting")
-        ftl.addRow("Initial sigma:", self.initial_sigma)
+        sec_fit.addRow("Initial sigma:", self.initial_sigma)
 
         self.max_iterations = _make_int_spin(500, 10, 5000)
         self.max_iterations.setToolTip(
             "Maximum Levenberg-Marquardt iterations (default 500, MLE 1000)")
-        ftl.addRow("Max iterations:", self.max_iterations)
+        sec_fit.addRow("Max iterations:", self.max_iterations)
 
         # Multi-emitter options
         self.max_emitters = _make_int_spin(5, 2, 10)
         self.max_emitters.setToolTip(
             "Maximum number of emitters to fit per ROI")
-        ftl.addRow("Max emitters:", self.max_emitters)
+        sec_fit.addRow("Max emitters:", self.max_emitters)
 
         self.p_value = QtWidgets.QComboBox()
         self.p_value.addItems(['1e-6', '1e-4', '1e-3', '0.01', '0.05'])
         self.p_value.setToolTip(
             "F-test p-value threshold for adding another emitter")
-        ftl.addRow("p-value threshold:", self.p_value)
+        sec_fit.addRow("p-value threshold:", self.p_value)
 
-        layout.addWidget(fit_group)
+        layout.addWidget(sec_fit)
 
         # ==================================================================
-        # Camera Model
+        # Camera Model (collapsible)
         # ==================================================================
-        cam_group = QtWidgets.QGroupBox("Camera Model")
-        cl = QtWidgets.QFormLayout(cam_group)
-        cl.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        sec_cam = _CollapsibleSection("Camera Model")
 
         self.pixel_size = _make_double_spin(108.0, 1.0, 10000.0,
                                              decimals=1, step=10.0,
                                              suffix=' nm')
         self.pixel_size.setToolTip("Camera pixel size in nanometers")
-        cl.addRow("Pixel size:", self.pixel_size)
+        sec_cam.addRow("Pixel size:", self.pixel_size)
 
         self.photons_per_adu = _make_double_spin(3.6, 0.01, 100.0,
                                                   decimals=2, step=0.1)
-        cl.addRow("Photons/ADU:", self.photons_per_adu)
+        sec_cam.addRow("Photons/ADU:", self.photons_per_adu)
 
         self.baseline = _make_double_spin(100.0, 0.0, 10000.0,
                                            decimals=1, step=10.0)
-        cl.addRow("Camera baseline:", self.baseline)
+        sec_cam.addRow("Camera baseline:", self.baseline)
 
         self.em_gain_cb = QtWidgets.QCheckBox()
-        cl.addRow("EM gain enabled:", self.em_gain_cb)
+        sec_cam.addRow("EM gain enabled:", self.em_gain_cb)
 
         self.em_gain_value = _make_double_spin(100.0, 1.0, 1000.0,
                                                 decimals=1, step=10.0)
         self.em_gain_value.setEnabled(False)
-        cl.addRow("EM gain value:", self.em_gain_value)
+        sec_cam.addRow("EM gain value:", self.em_gain_value)
 
         self.quantum_efficiency = _make_double_spin(1.0, 0.01, 1.0,
                                                      decimals=2, step=0.01)
-        cl.addRow("Quantum efficiency:", self.quantum_efficiency)
+        sec_cam.addRow("Quantum efficiency:", self.quantum_efficiency)
 
-        layout.addWidget(cam_group)
+        layout.addWidget(sec_cam)
 
         # ==================================================================
         # Post-processing (collapsible)
@@ -453,14 +491,15 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
 
         layout.addWidget(sec_render)
 
-        # Apply initial visibility
+        # Apply initial visibility for filter/detector/fitter-specific rows
         self._on_filter_changed(self.filter_type.currentText())
         self._on_detector_changed(self.detector_type.currentText())
         self._on_fitter_changed(self.fitter_type.currentText())
 
     def _connect(self):
         self.filter_type.currentTextChanged.connect(self._on_filter_changed)
-        self.detector_type.currentTextChanged.connect(self._on_detector_changed)
+        self.detector_type.currentTextChanged.connect(
+            self._on_detector_changed)
         self.fitter_type.currentTextChanged.connect(self._on_fitter_changed)
         self.em_gain_cb.toggled.connect(self.em_gain_value.setEnabled)
         # Post-processing enable/disable
@@ -498,31 +537,19 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
         is_box = ft == 'box'
         is_compound = '+' in ft
 
-        # Wavelet params
         self._set_row_visible(self.wavelet_scale, has_wavelet)
         self._set_row_visible(self.wavelet_order, has_wavelet)
-
-        # Gaussian params
         self._set_row_visible(self.gauss_sigma,
                               is_gaussian and not is_compound)
-
-        # DoG params
         self._set_row_visible(self.dog_sigma1, is_dog and not is_compound)
         self._set_row_visible(self.dog_sigma2, is_dog and not is_compound)
-
-        # Lowered Gaussian params
         self._set_row_visible(self.lowered_sigma, is_lowered)
         self._set_row_visible(self.lowered_size, is_lowered)
-
-        # Diff averaging params
         self._set_row_visible(self.diff_avg_size1, is_diff_avg)
         self._set_row_visible(self.diff_avg_size2, is_diff_avg)
-
-        # Median / box
         self._set_row_visible(self.median_size, is_median and not is_compound)
         self._set_row_visible(self.box_size, is_box)
 
-        # Compound secondary params
         is_compound_gauss = ft == 'wavelet+gaussian'
         is_compound_dog = ft == 'wavelet+dog'
         is_compound_median = ft == 'wavelet+median'
@@ -579,7 +606,6 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
             filter_params['size'] = self.median_size.value()
         elif ft == 'box':
             filter_params['size'] = self.box_size.value()
-        # Compound filter secondary params
         elif ft == 'wavelet+gaussian':
             filter_params['secondary_sigma'] = \
                 self.compound_secondary_sigma.value()
@@ -878,69 +904,25 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
 
 
 # ---------------------------------------------------------------------------
-# Collapsible group helper
-# ---------------------------------------------------------------------------
-
-class _CollapsibleSection(QtWidgets.QWidget):
-    """A section with a toggle button that shows/hides its contents."""
-
-    def __init__(self, title, parent=None):
-        super().__init__(parent)
-        self._toggle = QtWidgets.QToolButton()
-        self._toggle.setStyleSheet("QToolButton { border: none; }")
-        self._toggle.setToolButtonStyle(
-            QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._toggle.setArrowType(QtCore.Qt.ArrowType.RightArrow)
-        self._toggle.setText(title)
-        self._toggle.setCheckable(True)
-        self._toggle.setChecked(False)
-        self._toggle.toggled.connect(self._on_toggle)
-
-        self._content = QtWidgets.QWidget()
-        self._content.setVisible(False)
-        self._content_layout = QtWidgets.QFormLayout(self._content)
-        self._content_layout.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        self._content_layout.setSpacing(4)
-        self._content_layout.setContentsMargins(12, 4, 4, 4)
-
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-        lay.addWidget(self._toggle)
-        lay.addWidget(self._content)
-
-    def _on_toggle(self, checked):
-        self._toggle.setArrowType(
-            QtCore.Qt.ArrowType.DownArrow if checked
-            else QtCore.Qt.ArrowType.RightArrow)
-        self._content.setVisible(checked)
-
-    def addRow(self, label, widget):
-        self._content_layout.addRow(label, widget)
-
-
-# ---------------------------------------------------------------------------
 # U-Track Detection controls
 # ---------------------------------------------------------------------------
 
 class UTrackDetectionControlGroup(QtWidgets.QGroupBox):
     """Advanced U-Track detection parameters.
 
-    Exposes DoG bandpass, mixture fitting, local background, and
-    auto-estimation controls beyond the basic PSF sigma / alpha / min
-    intensity that appear in the main Detection tab.
+    All sections are collapsible. Exposes DoG bandpass, mixture fitting,
+    local background, and auto-estimation controls.
     """
 
     def __init__(self, parent=None):
-        super().__init__("U-Track Detection — Advanced", parent)
+        super().__init__("U-Track Detection \u2014 Advanced", parent)
         self.setCheckable(False)
         self._build()
 
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setSpacing(4)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(2)
+        layout.setContentsMargins(4, 4, 4, 4)
 
         # --- Bandpass filtering ---
         sec_bp = _CollapsibleSection("Bandpass Filtering")
@@ -972,7 +954,7 @@ class UTrackDetectionControlGroup(QtWidgets.QGroupBox):
 
         self.local_bg_inner = _make_double_spin(3.0, 0.0, 10.0,
                                                   decimals=1, step=0.5,
-                                                  suffix=' σ')
+                                                  suffix=' \u03c3')
         self.local_bg_inner.setToolTip(
             "Inner radius of local background annulus (in PSF sigma units).\n"
             "Set to 0 for global background estimation (legacy).")
@@ -980,7 +962,7 @@ class UTrackDetectionControlGroup(QtWidgets.QGroupBox):
 
         self.local_bg_outer = _make_double_spin(5.0, 1.0, 20.0,
                                                   decimals=1, step=0.5,
-                                                  suffix=' σ')
+                                                  suffix=' \u03c3')
         self.local_bg_outer.setToolTip(
             "Outer radius of local background annulus (in PSF sigma units).")
         sec_bg.addRow("BG annulus outer:", self.local_bg_outer)
@@ -990,12 +972,15 @@ class UTrackDetectionControlGroup(QtWidgets.QGroupBox):
         # --- Auto-estimation ---
         sec_auto = _CollapsibleSection("Auto-estimation")
 
-        self.auto_psf_btn = QtWidgets.QPushButton("Estimate PSF σ from image")
+        self.auto_psf_btn = QtWidgets.QPushButton(
+            "Estimate PSF \u03c3 from image")
         self.auto_psf_btn.setToolTip(
-            "Estimate PSF sigma from the autocorrelation of the current image.")
+            "Estimate PSF sigma from the autocorrelation of the current "
+            "image.")
         sec_auto.addRow("", self.auto_psf_btn)
 
-        self.auto_noise_btn = QtWidgets.QPushButton("Estimate noise from image")
+        self.auto_noise_btn = QtWidgets.QPushButton(
+            "Estimate noise from image")
         self.auto_noise_btn.setToolTip(
             "Estimate noise standard deviation from the image Laplacian.")
         sec_auto.addRow("", self.auto_noise_btn)
@@ -1030,9 +1015,9 @@ class UTrackDetectionControlGroup(QtWidgets.QGroupBox):
 class UTrackLAPControlGroup(QtWidgets.QGroupBox):
     """Advanced U-Track LAP linking parameters.
 
-    Exposes motion model, multi-round (FRF), adaptive search,
-    merge/split detection, cost matrix, Kalman filter, and gap closing
-    controls — matching the full U-Track 2.5 parameter set.
+    All sections are collapsible. Exposes motion model, multi-round (FRF),
+    adaptive search, merge/split detection, cost matrix, Kalman filter,
+    and gap closing controls matching U-Track 2.5.
     """
 
     def __init__(self, parent=None):
@@ -1043,28 +1028,26 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
 
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setSpacing(4)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(2)
+        layout.setContentsMargins(4, 4, 4, 4)
 
-        # --- Primary controls (always visible) ---
-        primary = QtWidgets.QFormLayout()
-        primary.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        primary.setSpacing(4)
+        # --- Primary controls (collapsible, starts expanded) ---
+        sec_primary = _CollapsibleSection("Motion & Tracking", expanded=True)
 
         self.motion_model = QtWidgets.QComboBox()
-        self.motion_model.addItems(['brownian', 'linear', 'confined', 'mixed'])
+        self.motion_model.addItems(
+            ['brownian', 'linear', 'confined', 'mixed'])
         self.motion_model.setCurrentText('mixed')
-        primary.addRow("Motion model:", self.motion_model)
+        sec_primary.addRow("Motion model:", self.motion_model)
 
         self.multi_round_cb = QtWidgets.QCheckBox()
         self.multi_round_cb.setChecked(True)
         self.multi_round_cb.setToolTip(
             "Forward-Reverse-Forward multi-round tracking")
-        primary.addRow("Multi-round (FRF):", self.multi_round_cb)
+        sec_primary.addRow("Multi-round (FRF):", self.multi_round_cb)
 
         self.tracking_rounds = _make_int_spin(3, 1, 5)
-        primary.addRow("Tracking rounds:", self.tracking_rounds)
+        sec_primary.addRow("Tracking rounds:", self.tracking_rounds)
 
         self.velocity_persistence = _make_double_spin(1.0, 0.0, 1.0,
                                                        decimals=2, step=0.05)
@@ -1072,25 +1055,26 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
             "Fraction of velocity retained per step in linear model.\n"
             "1.0 = constant velocity (U-Track 2.5 default).\n"
             "0.0 = Brownian (no velocity memory).")
-        primary.addRow("Velocity persistence:", self.velocity_persistence)
+        sec_primary.addRow("Velocity persistence:", self.velocity_persistence)
 
         self.merge_split_cb = QtWidgets.QCheckBox()
         self.merge_split_cb.setChecked(True)
         self.merge_split_cb.setToolTip(
             "Detect merge and split events during gap closing")
-        primary.addRow("Merge/split detection:", self.merge_split_cb)
+        sec_primary.addRow("Merge/split detection:", self.merge_split_cb)
 
         self.use_intensity_cb = QtWidgets.QCheckBox()
         self.use_intensity_cb.setToolTip(
             "Include intensity ratio in the linking cost matrix")
-        primary.addRow("Use intensity costs:", self.use_intensity_cb)
+        sec_primary.addRow("Use intensity costs:", self.use_intensity_cb)
 
         self.use_velocity_angle_cb = QtWidgets.QCheckBox()
         self.use_velocity_angle_cb.setToolTip(
             "Include velocity angle in the linking cost matrix")
-        primary.addRow("Use velocity angle costs:", self.use_velocity_angle_cb)
+        sec_primary.addRow("Use velocity angle costs:",
+                           self.use_velocity_angle_cb)
 
-        layout.addLayout(primary)
+        layout.addWidget(sec_primary)
 
         # --- Kalman Filter section ---
         sec_kalman = _CollapsibleSection("Kalman Filter")
@@ -1099,19 +1083,22 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
                                                           decimals=2, step=0.1)
         self.process_noise_brownian.setToolTip(
             "Process noise for the Brownian motion model (q).")
-        sec_kalman.addRow("Process noise (Brownian):", self.process_noise_brownian)
+        sec_kalman.addRow("Process noise (Brownian):",
+                          self.process_noise_brownian)
 
         self.process_noise_linear = _make_double_spin(0.5, 0.01, 50.0,
                                                         decimals=2, step=0.1)
         self.process_noise_linear.setToolTip(
             "Process noise for the linear (directed) motion model.")
-        sec_kalman.addRow("Process noise (Linear):", self.process_noise_linear)
+        sec_kalman.addRow("Process noise (Linear):",
+                          self.process_noise_linear)
 
         self.process_noise_confined = _make_double_spin(1.0, 0.01, 50.0,
                                                           decimals=2, step=0.1)
         self.process_noise_confined.setToolTip(
             "Process noise for the confined motion model.")
-        sec_kalman.addRow("Process noise (Confined):", self.process_noise_confined)
+        sec_kalman.addRow("Process noise (Confined):",
+                          self.process_noise_confined)
 
         self.measurement_noise = _make_double_spin(1.0, 0.01, 50.0,
                                                      decimals=2, step=0.1)
@@ -1130,7 +1117,7 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
         self.auto_estimate_noise_cb = QtWidgets.QCheckBox()
         self.auto_estimate_noise_cb.setToolTip(
             "Auto-set measurement noise from median localization\n"
-            "uncertainty (Cramér-Rao bound from detection).")
+            "uncertainty (Cram\u00e9r-Rao bound from detection).")
         sec_kalman.addRow("Auto-estimate noise:", self.auto_estimate_noise_cb)
 
         layout.addWidget(sec_kalman)
@@ -1154,7 +1141,7 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
         self.density_scaling = _make_double_spin(0.5, 0.0, 2.0,
                                                    decimals=2, step=0.05)
         self.density_scaling.setToolTip(
-            "Search radius = nearest-neighbor distance × this factor.\n"
+            "Search radius = nearest-neighbor distance \u00d7 this factor.\n"
             "Lower = more conservative in dense regions.")
         sec_search.addRow("Density scaling:", self.density_scaling)
 
@@ -1184,14 +1171,16 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
         self.velocity_angle_weight = _make_double_spin(0.1, 0.0, 5.0,
                                                          decimals=2, step=0.05)
         self.velocity_angle_weight.setToolTip(
-            "Weight for velocity angle cost term: (1−cos θ) × speed.")
+            "Weight for velocity angle cost term: (1\u2212cos \u03b8) "
+            "\u00d7 speed.")
         sec_cost.addRow("Velocity angle weight:", self.velocity_angle_weight)
 
         self.uncertainty_weight = _make_double_spin(1.0, 0.0, 10.0,
                                                       decimals=2, step=0.1)
         self.uncertainty_weight.setToolTip(
             "Weight for localization uncertainty normalization.\n"
-            "Cost is divided by (1 + w × (σ_track² + σ_det²)).\n"
+            "Cost is divided by (1 + w \u00d7 (\u03c3_track\u00b2 + "
+            "\u03c3_det\u00b2)).\n"
             "Set to 0 to disable uncertainty weighting.")
         sec_cost.addRow("Uncertainty weight:", self.uncertainty_weight)
 
@@ -1245,7 +1234,7 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
                                                decimals=2, step=0.1)
         self.gap_penalty.setToolTip(
             "Multiplicative penalty per gap frame (legacy mode).\n"
-            "Not used when d²/dt normalization is active.")
+            "Not used when d\u00b2/dt normalization is active.")
         sec_gap.addRow("Gap penalty:", self.gap_penalty)
 
         self.mobility_scaling_cb = QtWidgets.QCheckBox()
@@ -1353,20 +1342,24 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
             self.merge_split_cb.setChecked(config['merge_split_enabled'])
         # Kalman filter
         if 'process_noise_brownian' in config:
-            self.process_noise_brownian.setValue(config['process_noise_brownian'])
+            self.process_noise_brownian.setValue(
+                config['process_noise_brownian'])
         if 'process_noise_linear' in config:
             self.process_noise_linear.setValue(config['process_noise_linear'])
         if 'process_noise_confined' in config:
-            self.process_noise_confined.setValue(config['process_noise_confined'])
+            self.process_noise_confined.setValue(
+                config['process_noise_confined'])
         if 'measurement_noise' in config:
             self.measurement_noise.setValue(config['measurement_noise'])
         if 'confinement_spring' in config:
             self.confinement_spring.setValue(config['confinement_spring'])
         if 'auto_estimate_noise' in config:
-            self.auto_estimate_noise_cb.setChecked(config['auto_estimate_noise'])
+            self.auto_estimate_noise_cb.setChecked(
+                config['auto_estimate_noise'])
         # Adaptive search
         if 'time_reach_confidence' in config:
-            self.time_reach_confidence.setValue(config['time_reach_confidence'])
+            self.time_reach_confidence.setValue(
+                config['time_reach_confidence'])
         if 'density_scaling_factor' in config:
             self.density_scaling.setValue(config['density_scaling_factor'])
         if 'min_search_radius' in config:
@@ -1378,7 +1371,8 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
             self.intensity_weight.setValue(config['intensity_weight'])
             self.use_intensity_cb.setChecked(config['intensity_weight'] > 0)
         if 'velocity_angle_weight' in config:
-            self.velocity_angle_weight.setValue(config['velocity_angle_weight'])
+            self.velocity_angle_weight.setValue(
+                config['velocity_angle_weight'])
             self.use_velocity_angle_cb.setChecked(
                 config['velocity_angle_weight'] > 0)
         if 'uncertainty_weight' in config:
@@ -1420,7 +1414,7 @@ class UTrackLAPControlGroup(QtWidgets.QGroupBox):
 class TrackpyControlGroup(QtWidgets.QGroupBox):
     """Trackpy linking parameter controls.
 
-    Exposes the four linking types and adaptive search parameters.
+    All sections are collapsible. Exposes linking types and adaptive params.
     """
 
     def __init__(self, parent=None):
@@ -1430,45 +1424,44 @@ class TrackpyControlGroup(QtWidgets.QGroupBox):
         self._connect()
 
     def _build(self):
-        layout = QtWidgets.QFormLayout(self)
-        layout.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        layout.setSpacing(4)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(2)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        sec = _CollapsibleSection("Linking", expanded=True)
 
         self.link_type = QtWidgets.QComboBox()
         self.link_type.addItems([
             'standard', 'adaptive', 'velocityPredict',
             'adaptive + velocityPredict'])
-        layout.addRow("Link type:", self.link_type)
+        sec.addRow("Link type:", self.link_type)
 
         self.adaptive_stop = _make_double_spin(0.0, 0.0, 20.0,
                                                 decimals=1, step=0.5)
         self.adaptive_stop.setToolTip(
             "Minimum search range for adaptive mode (0 = auto)")
-        self.adaptive_stop.setVisible(False)
-        self._stop_label = QtWidgets.QLabel("Adaptive stop:")
-        self._stop_label.setVisible(False)
-        layout.addRow(self._stop_label, self.adaptive_stop)
+        sec.addRow("Adaptive stop:", self.adaptive_stop)
 
         self.adaptive_step = _make_double_spin(0.95, 0.5, 0.99,
                                                 decimals=2, step=0.01)
         self.adaptive_step.setToolTip(
             "Multiplicative factor for adaptive search reduction")
-        self.adaptive_step.setVisible(False)
-        self._step_label = QtWidgets.QLabel("Adaptive step:")
-        self._step_label.setVisible(False)
-        layout.addRow(self._step_label, self.adaptive_step)
+        sec.addRow("Adaptive step:", self.adaptive_step)
+
+        layout.addWidget(sec)
+
+        # Apply initial visibility
+        self._on_type_changed(self.link_type.currentText())
 
     def _connect(self):
         self.link_type.currentTextChanged.connect(self._on_type_changed)
 
     def _on_type_changed(self, text):
         is_adaptive = 'adaptive' in text.lower()
-        self.adaptive_stop.setVisible(is_adaptive)
-        self._stop_label.setVisible(is_adaptive)
-        self.adaptive_step.setVisible(is_adaptive)
-        self._step_label.setVisible(is_adaptive)
+        ThunderSTORMControlGroup._set_row_visible(
+            self.adaptive_stop, is_adaptive)
+        ThunderSTORMControlGroup._set_row_visible(
+            self.adaptive_step, is_adaptive)
 
     def get_params(self):
         """Return kwargs for ``link_with_trackpy``."""
