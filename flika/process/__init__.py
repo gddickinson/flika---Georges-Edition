@@ -31,6 +31,7 @@ from .calcium import *
 from .spectral import *
 from .morphometry import *
 from .structures import *
+from .simulation import simulate
 
 def _show_overlay_manager():
     """Open the Overlay Manager dock widget from the menu."""
@@ -281,8 +282,18 @@ def setup_menus():
     addAction(exportMenu, "Export Video", video_exporter.gui)
     addAction(exportMenu, "Batch Export", batch_export.gui)
 
+    # ---- Simulation menu (top-level) ----
+    simulationMenu = QtWidgets.QMenu("Simulation")
+    addAction(simulationMenu, "Simulation Builder...", simulate.gui)
+    presetMenu = simulationMenu.addMenu("Quick Presets")
+    from ..simulation.presets import PRESETS as _SIM_PRESETS
+    for _preset_name in _SIM_PRESETS:
+        addAction(presetMenu, _preset_name,
+                  lambda checked=False, p=_preset_name: simulate.run(preset=p))
+
     g.menus.append(imageMenu)
     g.menus.append(processMenu)
+    g.menus.append(simulationMenu)
     logger.debug("Completed 'process.__init__.setup_menus()'")
 
 logger.debug("Completed 'reading process/__init__.py'")
