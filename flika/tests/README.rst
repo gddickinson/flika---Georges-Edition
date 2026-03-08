@@ -19,7 +19,21 @@ Test files:
 - ``test_ai_gui.py`` -- GUI tests for AI dialogs: pixel classifier, object
   detection, particle localizer, denoiser, SAM, model zoo, annotation overlay,
   paint overlay, menu integration, workers (60 tests, requires Qt app).
-- ``test_spt_*.py`` -- Single-particle tracking module tests.
+- ``test_spt_*.py`` -- Single-particle tracking module tests (detection, linking,
+  features, I/O, pipeline).
+- ``test_spt_particle_data.py`` -- ParticleData model tests: constructors,
+  properties, accessors, mutation, I/O, round-trip (40+ tests, standalone).
+- ``test_spt_classifier.py`` -- SVM classifier lifecycle: train, predict,
+  save/load, feature extraction, edge cases (15+ tests, standalone).
+- ``test_spt_trackpy.py`` -- Trackpy linker adapter: all 4 link types, memory,
+  min_track_length, stats (15+ tests, standalone, requires trackpy).
+- ``test_spt_io_extended.py`` -- Extended SPT I/O: format detection, JSON tracks,
+  ThunderSTORM extras, validation errors, ParticleData wrappers (25+ tests).
+- ``test_dynamics.py`` -- FRAP, FRET, calcium, spectral unmixing, morphometry
+  pure analysis function tests (50+ tests, standalone).
+- ``test_structures.py`` -- Structure detection tests: Frangi vesselness, skeletonize,
+  medial axis, skeleton analysis, Hough lines/circles, corner detection, LBP,
+  structure tensor (26 tests, requires Qt app).
 - ``test_macros.py`` -- Legacy plugin manager tests (excluded by default due to
   pre-existing PyQt6 issues).
 

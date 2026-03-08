@@ -16,15 +16,61 @@ def is_imagej_available():
         return False
 
 
-def get_imagej(fiji_path=None):
-    """Get or create an ImageJ2 gateway."""
+def get_imagej(fiji_path=None, mode=None):
+    """Get or create an ImageJ2 gateway.
+
+    On macOS, PyImageJ cannot use plain ``interactive`` mode when a Qt
+    event loop already owns the main thread (which is always the case
+    inside flika).  We therefore fall back through several modes:
+
+    1. ``headless`` -- if ``g.headless`` is set.
+    2. ``interactive:force`` -- on macOS when Qt is running (bypasses
+       the CoreFoundation main-thread check).
+    3. ``interactive`` -- on other platforms.
+
+    Parameters
+    ----------
+    fiji_path : str, optional
+        Path to a local Fiji installation, or a Maven coordinate
+        (default ``'sc.fiji:fiji'``).
+    mode : str, optional
+        Explicit PyImageJ init mode.  When *None* the mode is chosen
+        automatically as described above.
+    """
     global _ij_instance
     if _ij_instance is not None:
         return _ij_instance
+
     import imagej
-    mode = 'headless' if getattr(g, 'headless', False) else 'interactive'
-    _ij_instance = imagej.init(fiji_path or 'sc.fiji:fiji', mode=mode)
-    logger.info(f'Initialized ImageJ2 in {mode} mode')
+    import sys
+
+    if mode is None:
+        if getattr(g, 'headless', False):
+            mode = 'headless'
+        elif sys.platform == 'darwin':
+            # macOS: Qt already owns the main thread, so plain
+            # 'interactive' raises an EnvironmentError.  Use the
+            # force flag so PyImageJ skips the CoreFoundation check.
+            mode = 'interactive:force'
+        else:
+            mode = 'interactive'
+
+    endpoint = fiji_path or 'sc.fiji:fiji'
+
+    try:
+        _ij_instance = imagej.init(endpoint, mode=mode)
+    except (EnvironmentError, OSError) as exc:
+        # If interactive:force also fails, fall back to headless so the
+        # user can still transfer data programmatically.
+        if 'headless' not in mode:
+            logger.warning('ImageJ interactive init failed (%s); '
+                           'falling back to headless mode.', exc)
+            mode = 'headless'
+            _ij_instance = imagej.init(endpoint, mode=mode)
+        else:
+            raise
+
+    logger.info('Initialized ImageJ2 in %s mode', mode)
     return _ij_instance
 
 

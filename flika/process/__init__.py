@@ -25,6 +25,12 @@ from .linescan import *
 from .background_sub import *
 from .deconvolution import *
 from .stitching import *
+from .frap import *
+from .fret import *
+from .calcium import *
+from .spectral import *
+from .morphometry import *
+from .structures import *
 
 def _show_overlay_manager():
     """Open the Overlay Manager dock widget from the menu."""
@@ -240,6 +246,32 @@ def setup_menus():
     addAction(deconvMenu, "Richardson-Lucy", richardson_lucy.gui)
     addAction(deconvMenu, "Wiener Deconvolution", wiener_deconvolution.gui)
     addAction(deconvMenu, "Generate PSF", generate_psf.gui)
+
+    # ---- Process > Dynamics ----
+    dynamicsMenu = processMenu.addMenu("Dynamics")
+    addAction(dynamicsMenu, "FRAP Analysis", frap_analysis.gui)
+    addAction(dynamicsMenu, "FRET Analysis", fret_analysis.gui)
+    addAction(dynamicsMenu, "Calcium Analysis", calcium_analysis.gui)
+    addAction(dynamicsMenu, "Spectral Unmixing", spectral_unmixing.gui)
+
+    # ---- Process > Structures ----
+    structMenu = processMenu.addMenu("Structures")
+    structMenu_network = structMenu.addMenu("Network Analysis")
+    addAction(structMenu_network, "Frangi Vesselness", frangi_vesselness.gui)
+    addAction(structMenu_network, "Skeletonize", skeletonize_process.gui)
+    addAction(structMenu_network, "Medial Axis", medial_axis_process.gui)
+    addAction(structMenu_network, "Skeleton Analysis", skeleton_analysis.gui)
+    structMenu.addSeparator()
+    addAction(structMenu, "Hough Lines", hough_lines.gui)
+    addAction(structMenu, "Hough Circles", hough_circles.gui)
+    structMenu.addSeparator()
+    addAction(structMenu, "Corner Detection", corner_detection.gui)
+    structMenu.addSeparator()
+    addAction(structMenu, "Local Binary Pattern", local_binary_pattern_process.gui)
+    addAction(structMenu, "Structure Tensor", structure_tensor_analysis.gui)
+
+    # ---- Process > Morphometry ----
+    addAction(processMenu, "Morphometry Analysis", morphometry_analysis.gui)
 
     # ---- Process > Stitching ----
     addAction(processMenu, "Stitch Images", stitch_images.gui)

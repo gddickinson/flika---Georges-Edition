@@ -528,17 +528,39 @@ class FlikaApplication(QtWidgets.QMainWindow):
 
     def _send_to_imagej(self):
         try:
-            from ..interop.imagej_bridge import to_imagej
-            to_imagej()
+            from ..interop.imagej_bridge import to_imagej, _ij_instance
+            if _ij_instance is None:
+                self.statusBar().showMessage(
+                    'Initializing ImageJ (first launch may download JRE)...')
+                QtWidgets.QApplication.processEvents()
+            self.setCursor(QtCore.Qt.CursorShape.WaitCursor)
+            try:
+                to_imagej()
+            finally:
+                self.unsetCursor()
+                self.statusBar().clearMessage()
         except ImportError:
             g.alert('pyimagej is not installed. Install with: pip install pyimagej')
+        except (EnvironmentError, OSError) as exc:
+            g.alert(f'Could not initialize ImageJ: {exc}')
 
     def _import_from_imagej(self):
         try:
-            from ..interop.imagej_bridge import from_imagej
-            from_imagej()
+            from ..interop.imagej_bridge import from_imagej, _ij_instance
+            if _ij_instance is None:
+                self.statusBar().showMessage(
+                    'Initializing ImageJ (first launch may download JRE)...')
+                QtWidgets.QApplication.processEvents()
+            self.setCursor(QtCore.Qt.CursorShape.WaitCursor)
+            try:
+                from_imagej()
+            finally:
+                self.unsetCursor()
+                self.statusBar().clearMessage()
         except ImportError:
             g.alert('pyimagej is not installed. Install with: pip install pyimagej')
+        except (EnvironmentError, OSError) as exc:
+            g.alert(f'Could not initialize ImageJ: {exc}')
 
     def _export_ome_tiff(self):
         from ..interop.ome import to_ome_tiff

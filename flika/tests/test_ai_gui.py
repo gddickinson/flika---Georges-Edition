@@ -111,9 +111,13 @@ class TestPixelClassifierDialog:
 
     def test_add_class(self, sample_window):
         from ..ai.classifier_dialog import PixelClassifierDialog
+        from unittest.mock import patch
         dlg = PixelClassifierDialog(parent=g.m)
         initial_count = len(dlg._class_list)
-        dlg._add_class()
+        # Mock QInputDialog to avoid blocking on user input
+        with patch('qtpy.QtWidgets.QInputDialog.getText',
+                   return_value=('TestClass', True)):
+            dlg._add_class()
         assert len(dlg._class_list) == initial_count + 1
         dlg.close()
 

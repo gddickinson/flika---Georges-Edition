@@ -7,6 +7,9 @@ _STANDALONE_MODULES = {
     'test_macro_recorder', 'test_undo',
     'test_spt_detection', 'test_spt_linking', 'test_spt_features',
     'test_spt_io', 'test_spt_pipeline',
+    'test_spt_particle_data', 'test_spt_classifier', 'test_spt_trackpy',
+    'test_spt_io_extended',
+    'test_dynamics',
     'test_ai',
 }
 
