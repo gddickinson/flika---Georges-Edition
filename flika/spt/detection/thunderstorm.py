@@ -286,6 +286,57 @@ class NoFilter(BaseFilter):
         return result
 
 
+class CompoundFilter(BaseFilter):
+    """Compound (chained) filter — applies two filters sequentially.
+
+    This matches the ThunderSTORM ImageJ plugin's compound filter concept,
+    where a primary filter (typically wavelet) is combined with a secondary
+    filter (e.g. Gaussian, DoG, averaging) for enhanced background
+    suppression and noise rejection.
+
+    In the original ThunderSTORM, the "Wavelet filter (B-spline)" can be
+    combined with any other filter.  The compound filter applies the
+    primary filter first, then the secondary filter on the result.
+
+    The threshold expression variables (``Wave.F1``, ``F1``) reference
+    the output of the full compound filter chain.
+
+    Parameters
+    ----------
+    primary : BaseFilter
+        First filter to apply (e.g. WaveletFilter).
+    secondary : BaseFilter
+        Second filter to apply on the primary output (e.g. GaussianFilter).
+
+    Examples
+    --------
+    Wavelet + Gaussian compound::
+
+        f = CompoundFilter(WaveletFilter(scale=2), GaussianFilter(sigma=1.0))
+        result = f.apply(image)
+
+    Wavelet + DoG compound::
+
+        f = CompoundFilter(WaveletFilter(scale=2),
+                           DifferenceOfGaussiansFilter(sigma1=1.0, sigma2=2.0))
+        result = f.apply(image)
+    """
+
+    def __init__(self, primary, secondary):
+        name = f"Compound({primary.name}+{secondary.name})"
+        super().__init__(name)
+        self.primary = primary
+        self.secondary = secondary
+
+    def apply(self, image):
+        """Apply primary filter, then secondary filter on the result."""
+        intermediate = self.primary.apply(image)
+        result = self.secondary.apply(intermediate)
+        # Store F1 from the final stage for threshold expression evaluation
+        self.F1 = result
+        return result
+
+
 def create_filter(filter_type, **kwargs):
     """Factory function to create image filters.
 
@@ -294,8 +345,12 @@ def create_filter(filter_type, **kwargs):
     filter_type : str
         One of: 'wavelet', 'gaussian', 'dog', 'lowered_gaussian',
         'difference_of_averaging', 'median', 'box', 'none'.
+        Compound filters use '+' separator, e.g. 'wavelet+gaussian',
+        'wavelet+dog'.
     **kwargs
-        Filter-specific parameters.
+        Filter-specific parameters.  For compound filters, prefix
+        secondary filter params with ``secondary_``, e.g.
+        ``secondary_sigma=1.0`` for a Gaussian secondary filter.
 
     Returns
     -------
@@ -312,7 +367,34 @@ def create_filter(filter_type, **kwargs):
         'box': BoxFilter,
         'none': NoFilter,
     }
+
     key = filter_type.lower()
+
+    # Handle compound filters (e.g. 'wavelet+gaussian', 'wavelet+dog')
+    if '+' in key:
+        parts = [p.strip() for p in key.split('+', 1)]
+        if len(parts) != 2:
+            raise ValueError(f"Compound filter must have exactly two "
+                             f"parts separated by '+': {filter_type!r}")
+        primary_key, secondary_key = parts
+        if primary_key not in _filter_map:
+            raise ValueError(f"Unknown primary filter: {primary_key!r}")
+        if secondary_key not in _filter_map:
+            raise ValueError(f"Unknown secondary filter: {secondary_key!r}")
+
+        # Split kwargs: secondary_ prefix goes to secondary filter
+        primary_kwargs = {}
+        secondary_kwargs = {}
+        for k, v in kwargs.items():
+            if k.startswith('secondary_'):
+                secondary_kwargs[k[len('secondary_'):]] = v
+            else:
+                primary_kwargs[k] = v
+
+        primary = _filter_map[primary_key](**primary_kwargs)
+        secondary = _filter_map[secondary_key](**secondary_kwargs)
+        return CompoundFilter(primary, secondary)
+
     if key not in _filter_map:
         raise ValueError(
             f"Unknown filter type: {filter_type!r}. "
@@ -558,8 +640,41 @@ class CentroidDetector(BaseDetector):
         """Detect centroids of connected components."""
         binary = image > threshold
 
-        if _HAS_MEASURE:
+        if self.use_watershed:
+            # Watershed segmentation to split touching objects
+            dist = ndimage.distance_transform_edt(binary)
+            # Find local maxima of distance transform as markers
+            from scipy.ndimage import maximum_filter
+            local_max = (dist == maximum_filter(dist, size=3)) & binary
+            markers, n_markers = ndimage.label(local_max)
+            if n_markers > 1:
+                try:
+                    from skimage.segmentation import watershed as sk_watershed
+                    labeled = sk_watershed(-dist, markers, mask=binary)
+                except ImportError:
+                    # Fallback: use scipy watershed_ift
+                    try:
+                        labeled = ndimage.watershed_ift(
+                            (-dist * 1000).astype(np.int16), markers)
+                        labeled[~binary] = 0
+                    except Exception:
+                        if _HAS_MEASURE:
+                            labeled = measure.label(
+                                binary, connectivity=self.connectivity)
+                        else:
+                            labeled, _ = ndimage.label(binary)
+            else:
+                if _HAS_MEASURE:
+                    labeled = measure.label(
+                        binary, connectivity=self.connectivity)
+                else:
+                    labeled, _ = ndimage.label(binary)
+        elif _HAS_MEASURE:
             labeled = measure.label(binary, connectivity=self.connectivity)
+        else:
+            labeled, _ = ndimage.label(binary)
+
+        if _HAS_MEASURE:
             regions = measure.regionprops(labeled, intensity_image=image)
 
             coordinates = []
@@ -568,8 +683,7 @@ class CentroidDetector(BaseDetector):
                     coordinates.append([region.weighted_centroid[0],
                                         region.weighted_centroid[1]])
         else:
-            # Fallback without skimage.measure
-            labeled, n_labels = ndimage.label(binary)
+            n_labels = labeled.max()
             coordinates = []
             for label_id in range(1, n_labels + 1):
                 mask = labeled == label_id
@@ -867,8 +981,14 @@ def _fit_integrated_gaussian_lsq(roi, row_offset, col_offset,
     # Initial parameter estimates
     offset = max(float(np.min(roi_f)), 0.01)
     peak = float(np.max(roi_f)) - offset
-    x0 = float(nx) / 2.0
-    y0 = float(ny) / 2.0
+    total = roi_f.sum()
+    if total > 0:
+        yy, xx = np.mgrid[0:ny, 0:nx]
+        x0 = float(np.sum(xx * roi_f) / total)
+        y0 = float(np.sum(yy * roi_f) / total)
+    else:
+        x0 = float(nx) / 2.0
+        y0 = float(ny) / 2.0
     sigma = initial_sigma
     intensity = max(peak * 2.0 * math.pi * sigma * sigma, 1.0)
 
@@ -877,7 +997,7 @@ def _fit_integrated_gaussian_lsq(roi, row_offset, col_offset,
     p3 = math.sqrt(intensity)
     p4 = math.sqrt(offset)
 
-    lambda_lm = 1.0
+    lambda_lm = 0.001
 
     # Precompute pixel coordinate arrays
     jj_arr = np.arange(nx, dtype=np.float64)
@@ -1003,15 +1123,21 @@ def _fit_integrated_gaussian_wlsq(roi, row_offset, col_offset,
 
     offset = max(float(np.min(roi_f)), 0.01)
     peak = float(np.max(roi_f)) - offset
-    x0 = float(nx) / 2.0
-    y0 = float(ny) / 2.0
+    total = roi_f.sum()
+    if total > 0:
+        yy, xx = np.mgrid[0:ny, 0:nx]
+        x0 = float(np.sum(xx * roi_f) / total)
+        y0 = float(np.sum(yy * roi_f) / total)
+    else:
+        x0 = float(nx) / 2.0
+        y0 = float(ny) / 2.0
     sigma = initial_sigma
     intensity = max(peak * 2.0 * math.pi * sigma * sigma, 1.0)
 
     p2 = math.sqrt(sigma)
     p3 = math.sqrt(intensity)
     p4 = math.sqrt(offset)
-    lambda_lm = 1.0
+    lambda_lm = 0.001
 
     jj_arr = np.arange(nx, dtype=np.float64)
     ii_arr = np.arange(ny, dtype=np.float64)
@@ -1132,15 +1258,21 @@ def _fit_integrated_gaussian_mle(roi, row_offset, col_offset,
 
     offset = max(float(np.min(roi_f)), 0.1)
     peak = float(np.max(roi_f)) - offset
-    x0 = float(nx) / 2.0
-    y0 = float(ny) / 2.0
+    total = roi_f.sum()
+    if total > 0:
+        yy, xx = np.mgrid[0:ny, 0:nx]
+        x0 = float(np.sum(xx * roi_f) / total)
+        y0 = float(np.sum(yy * roi_f) / total)
+    else:
+        x0 = float(nx) / 2.0
+        y0 = float(ny) / 2.0
     sigma = initial_sigma
     intensity = max(peak * 2.0 * math.pi * sigma * sigma, 1.0)
 
     p2 = math.sqrt(sigma)
     p3 = math.sqrt(intensity)
     p4 = math.sqrt(offset)
-    lambda_lm = 1.0
+    lambda_lm = 0.001
 
     jj_arr = np.arange(nx, dtype=np.float64)
     ii_arr = np.arange(ny, dtype=np.float64)
@@ -1261,8 +1393,14 @@ def _fit_elliptical_gaussian_mle(roi, row_offset, col_offset,
 
     offset = max(float(np.min(roi_f)), 0.1)
     peak = float(np.max(roi_f)) - offset
-    x0 = float(nx) / 2.0
-    y0 = float(ny) / 2.0
+    total = roi_f.sum()
+    if total > 0:
+        yy, xx = np.mgrid[0:ny, 0:nx]
+        x0 = float(np.sum(xx * roi_f) / total)
+        y0 = float(np.sum(yy * roi_f) / total)
+    else:
+        x0 = float(nx) / 2.0
+        y0 = float(ny) / 2.0
     sigma1 = initial_sigma
     sigma2 = initial_sigma
     intensity = max(peak * 2.0 * math.pi * sigma1 * sigma2, 1.0)
@@ -1271,7 +1409,7 @@ def _fit_elliptical_gaussian_mle(roi, row_offset, col_offset,
     p_s2 = math.sqrt(sigma2)
     p_I = math.sqrt(intensity)
     p_bg = math.sqrt(offset)
-    lambda_lm = 1.0
+    lambda_lm = 0.001
 
     jj_arr = np.arange(nx, dtype=np.float64)
     ii_arr = np.arange(ny, dtype=np.float64)
@@ -1683,9 +1821,14 @@ def _fit_multi_emitter(roi, row_offset, col_offset, initial_sigma=1.3,
     list of dict
         List of fit results, one per detected emitter.
     """
+    from scipy import stats as scipy_stats
+
     ny, nx = roi.shape
     n_pixels = ny * nx
     roi_f = roi.astype(np.float64)
+
+    jj_arr = np.arange(nx, dtype=np.float64)
+    ii_arr = np.arange(ny, dtype=np.float64)
 
     # Start with single-emitter fit
     result_1 = _fit_integrated_gaussian_mle(
@@ -1713,18 +1856,155 @@ def _fit_multi_emitter(roi, row_offset, col_offset, initial_sigma=1.3,
         residual = roi_f - model_image
         max_idx = np.unravel_index(np.argmax(residual), residual.shape)
 
-        # Create a sub-ROI around the residual peak
+        # Seed new emitter at residual peak position
+        seed_y = float(max_idx[0])
+        seed_x = float(max_idx[1])
+
+        # Fit new emitter individually, seeded at residual peak
         new_result = _fit_integrated_gaussian_mle(
             roi_f, row_offset, col_offset, initial_sigma)
 
         if new_result is None:
             break
 
-        new_chi_sq = new_result['chi_squared'] * n_pixels
+        # Override initial position with residual peak
+        new_result_local = dict(new_result)
+        new_result_local['x'] = seed_x + col_offset
+        new_result_local['y'] = seed_y + row_offset
+
+        candidate_results = list(results) + [new_result_local]
+
+        # --- Joint re-optimization of ALL emitters ---
+        n_emit = len(candidate_results)
+        # Parameter vector: [x1, y1, sigma1, I1, x2, y2, sigma2, I2, ..., bg]
+        n_params = n_emit * 4 + 1
+        dof_new = n_pixels - n_params
+        if dof_new <= 0:
+            break
+
+        # Build initial parameter vector from individual fits
+        params = np.zeros(n_params)
+        for k, res in enumerate(candidate_results):
+            params[k * 4 + 0] = res['x'] - col_offset  # local x
+            params[k * 4 + 1] = res['y'] - row_offset  # local y
+            params[k * 4 + 2] = math.sqrt(res['sigma_x'])  # sqrt(sigma)
+            params[k * 4 + 3] = math.sqrt(res['intensity'])  # sqrt(I)
+        params[-1] = math.sqrt(candidate_results[-1]['background'])  # sqrt(bg)
+
+        # Joint LM optimization
+        lambda_lm = 0.001
+        max_joint_iter = 200
+
+        def _joint_model_and_residual(p, roi_data):
+            """Compute chi-squared for joint parameters."""
+            bg = p[-1] * p[-1]
+            chi_sq = 0.0
+            for ii in range(ny):
+                fi = ii_arr[ii]
+                for jj in range(nx):
+                    fj = jj_arr[jj]
+                    mv = bg
+                    for k in range(n_emit):
+                        lx = p[k * 4 + 0]
+                        ly = p[k * 4 + 1]
+                        sig = p[k * 4 + 2] * p[k * 4 + 2]
+                        inten = p[k * 4 + 3] * p[k * 4 + 3]
+                        mv += _integrated_gaussian_value(
+                            fj, fi, lx, ly, sig, inten, 0.0)
+                    r = roi_data[ii, jj] - mv
+                    chi_sq += r * r
+            return chi_sq
+
+        joint_chi_sq = _joint_model_and_residual(params, roi_f)
+
+        joint_success = False
+        for iteration in range(max_joint_iter):
+            H = np.zeros((n_params, n_params))
+            g_vec = np.zeros(n_params)
+
+            bg_val = params[-1] * params[-1]
+
+            for ii in range(ny):
+                fi = ii_arr[ii]
+                for jj in range(nx):
+                    fj = jj_arr[jj]
+                    mv = bg_val
+                    for k in range(n_emit):
+                        lx = params[k * 4 + 0]
+                        ly = params[k * 4 + 1]
+                        sig = params[k * 4 + 2] * params[k * 4 + 2]
+                        inten = params[k * 4 + 3] * params[k * 4 + 3]
+                        mv += _integrated_gaussian_value(
+                            fj, fi, lx, ly, sig, inten, 0.0)
+
+                    residual_val = roi_f[ii, jj] - mv
+
+                    J = np.zeros(n_params)
+                    for k in range(n_emit):
+                        lx = params[k * 4 + 0]
+                        ly = params[k * 4 + 1]
+                        sig = params[k * 4 + 2] * params[k * 4 + 2]
+                        inten = params[k * 4 + 3] * params[k * 4 + 3]
+                        J_orig = _integrated_gaussian_jacobian(
+                            fj, fi, lx, ly, sig, inten, 0.0)
+                        # dx, dy are direct; dsigma and dI use chain rule
+                        J[k * 4 + 0] = J_orig[0]
+                        J[k * 4 + 1] = J_orig[1]
+                        J[k * 4 + 2] = J_orig[2] * 2.0 * params[k * 4 + 2]
+                        J[k * 4 + 3] = J_orig[3] * 2.0 * params[k * 4 + 3]
+                    # Background derivative: d/d(p_bg) of bg = 2*p_bg
+                    J[-1] = 2.0 * params[-1]
+
+                    g_vec += J * residual_val
+                    H += np.outer(J, J)
+
+            # Augment diagonal
+            H_aug = H.copy()
+            diag_h = np.diag(H_aug).copy()
+            diag_h[diag_h < 1e-30] = 1e-30
+            H_aug[np.diag_indices(n_params)] = diag_h * (1.0 + lambda_lm)
+
+            try:
+                dp = np.linalg.solve(H_aug, g_vec)
+            except np.linalg.LinAlgError:
+                break
+
+            params_new = params + dp
+
+            # Enforce sigma bounds
+            for k in range(n_emit):
+                sig_new = params_new[k * 4 + 2] * params_new[k * 4 + 2]
+                sig_new = min(max(sig_new, 0.1), 10.0)
+                params_new[k * 4 + 2] = math.sqrt(sig_new)
+
+            chi_sq_new = _joint_model_and_residual(params_new, roi_f)
+
+            if chi_sq_new < joint_chi_sq:
+                rel_change = abs(joint_chi_sq - chi_sq_new) / max(
+                    joint_chi_sq, 1e-30)
+                params = params_new
+                joint_chi_sq = chi_sq_new
+                lambda_lm = max(lambda_lm / 10.0, 1e-7)
+                if rel_change < 1e-8:
+                    joint_success = True
+                    break
+            else:
+                lambda_lm *= 10.0
+                if lambda_lm > 1e10:
+                    break
+        else:
+            # Completed all iterations without early break
+            joint_success = True
+
+        if joint_success:
+            new_chi_sq = joint_chi_sq
+        else:
+            # Fall back to individual fits
+            new_chi_sq = new_result['chi_squared'] * n_pixels
 
         # F-test: is the improvement significant?
-        dof_old = n_pixels - 5 * len(results)
-        dof_new = n_pixels - 5 * (len(results) + 1)
+        dof_old = n_pixels - (len(results) * 4 + 1)
+        dof_new = n_pixels - n_params
 
         if dof_new <= 0 or dof_old <= 0:
             break
@@ -1734,10 +2014,27 @@ def _fit_multi_emitter(roi, row_offset, col_offset, initial_sigma=1.3,
         if f_stat <= 0:
             break
 
-        # Approximate p-value using chi-squared approximation
-        # For simplicity, just check if F-statistic is large enough
-        if f_stat > -2.0 * math.log(p_value_threshold):
-            results.append(new_result)
+        # Proper F-test using F-distribution survival function
+        p_value = scipy_stats.f.sf(f_stat, dfn=5, dfd=dof_new)
+
+        if p_value < p_value_threshold:
+            if joint_success:
+                # Build results from joint parameters
+                bg_final = params[-1] * params[-1]
+                joint_results = []
+                for k in range(n_emit):
+                    joint_results.append({
+                        'x': params[k * 4 + 0] + col_offset,
+                        'y': params[k * 4 + 1] + row_offset,
+                        'intensity': params[k * 4 + 3] * params[k * 4 + 3],
+                        'sigma_x': params[k * 4 + 2] * params[k * 4 + 2],
+                        'sigma_y': params[k * 4 + 2] * params[k * 4 + 2],
+                        'background': bg_final,
+                        'chi_squared': new_chi_sq / n_pixels,
+                    })
+                results = joint_results
+            else:
+                results.append(new_result)
             best_chi_sq = new_chi_sq
         else:
             break
@@ -1818,8 +2115,25 @@ class DriftCorrector:
             peak_y, peak_x = np.unravel_index(np.argmax(xcorr), xcorr.shape)
             cy, cx = np.array(xcorr.shape) // 2
 
-            segment_drift_x.append((peak_x - cx) * pixel_size_render)
-            segment_drift_y.append((peak_y - cy) * pixel_size_render)
+            # Sub-pixel refinement via parabolic interpolation
+            sub_x, sub_y = float(peak_x), float(peak_y)
+            if 0 < peak_x < xcorr.shape[1] - 1:
+                left = xcorr[peak_y, peak_x - 1]
+                center = xcorr[peak_y, peak_x]
+                right = xcorr[peak_y, peak_x + 1]
+                denom = 2.0 * center - left - right
+                if abs(denom) > 1e-10:
+                    sub_x += (left - right) / (2.0 * denom)
+            if 0 < peak_y < xcorr.shape[0] - 1:
+                top = xcorr[peak_y - 1, peak_x]
+                center = xcorr[peak_y, peak_x]
+                bottom = xcorr[peak_y + 1, peak_x]
+                denom = 2.0 * center - top - bottom
+                if abs(denom) > 1e-10:
+                    sub_y += (top - bottom) / (2.0 * denom)
+
+            segment_drift_x.append((sub_x - cx) * pixel_size_render)
+            segment_drift_y.append((sub_y - cy) * pixel_size_render)
             segment_centers.append((start + end) / 2.0)
 
         if len(segment_centers) < 2:
@@ -1827,19 +2141,26 @@ class DriftCorrector:
             self.drift_y = np.zeros(n_frames)
             return
 
-        all_frames = np.arange(n_frames)
-        self.drift_x = np.interp(all_frames, segment_centers,
-                                  segment_drift_x)
-        self.drift_y = np.interp(all_frames, segment_centers,
-                                  segment_drift_y)
-
-        # Smooth
-        if n_frames > 3:
-            sigma_smooth = max(n_frames * self.smoothing / 6.0, 1.0)
-            self.drift_x = ndimage.gaussian_filter1d(
-                self.drift_x, sigma_smooth)
-            self.drift_y = ndimage.gaussian_filter1d(
-                self.drift_y, sigma_smooth)
+        # Cubic spline smoothing
+        from scipy.interpolate import UnivariateSpline
+        try:
+            s_factor = max(len(segment_centers) * self.smoothing, 1.0)
+            spl_x = UnivariateSpline(segment_centers, segment_drift_x, s=s_factor)
+            spl_y = UnivariateSpline(segment_centers, segment_drift_y, s=s_factor)
+            all_frames = np.arange(n_frames)
+            self.drift_x = spl_x(all_frames)
+            self.drift_y = spl_y(all_frames)
+        except Exception:
+            # Fallback to linear interpolation + Gaussian smoothing
+            all_frames = np.arange(n_frames)
+            self.drift_x = np.interp(all_frames, segment_centers, segment_drift_x)
+            self.drift_y = np.interp(all_frames, segment_centers, segment_drift_y)
+            if n_frames > 3:
+                sigma_smooth = max(n_frames * self.smoothing / 6.0, 1.0)
+                self.drift_x = ndimage.gaussian_filter1d(
+                    self.drift_x, sigma_smooth)
+                self.drift_y = ndimage.gaussian_filter1d(
+                    self.drift_y, sigma_smooth)
 
     def apply_correction(self, localizations):
         """Apply drift correction to localizations.

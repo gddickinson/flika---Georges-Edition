@@ -30,7 +30,7 @@ class KalmanFilter2D:
       - 'confined':  Ornstein-Uhlenbeck restoring force toward a
                      confinement_center; control input applied in predict()
 
-    Process noise Q is diagonal: [q*dt, q*dt, q, q].
+    Process noise Q uses Continuous White Noise Acceleration (CWNA).
     Covariance update uses the numerically stable Joseph form.
     Innovation likelihood uses slogdet for numerical stability.
 
@@ -48,7 +48,7 @@ class KalmanFilter2D:
     """
 
     def __init__(self, dt=1.0, process_noise=1.0, measurement_noise=1.0,
-                 motion_type='brownian', velocity_persistence=0.8,
+                 motion_type='brownian', velocity_persistence=1.0,
                  confinement_spring=0.1, confinement_center=None):
         self.dt = dt
         self.motion_type = motion_type
@@ -73,16 +73,14 @@ class KalmanFilter2D:
             # Velocity decays to zero: F[2,2]=0, F[3,3]=0  (already set)
             pass
         elif motion_type == 'linear':
-            # Velocity persists with decay factor
+            # Velocity persists (constant velocity model, F[2,2]=F[3,3]=1.0)
             self.F[2, 2] = velocity_persistence
             self.F[3, 3] = velocity_persistence
         elif motion_type == 'confined':
             # Ornstein-Uhlenbeck: position pulled toward center
-            # F[0,0] = 1 - k*dt, F[1,1] = 1 - k*dt
             k = confinement_spring
             self.F[0, 0] = 1.0 - k * dt
             self.F[1, 1] = 1.0 - k * dt
-            # Velocity still decays (no persistence for confined)
             self.F[2, 2] = 0.0
             self.F[3, 3] = 0.0
         else:
@@ -95,8 +93,22 @@ class KalmanFilter2D:
             [0, 1, 0, 0]
         ], dtype=np.float64)
 
-        # --- Process noise Q: diagonal [q*dt, q*dt, q, q] ---
-        self.Q = np.diag([q * dt, q * dt, q, q]).astype(np.float64)
+        # --- Process noise Q: Continuous White Noise Acceleration (CWNA) ---
+        # Physically motivated: models process noise as integrated
+        # acceleration noise, correctly capturing position-velocity
+        # cross-covariance.
+        # Q = q * [[dt³/3, 0,     dt²/2, 0    ],
+        #          [0,     dt³/3, 0,     dt²/2],
+        #          [dt²/2, 0,     dt,    0    ],
+        #          [0,     dt²/2, 0,     dt   ]]
+        dt3_3 = dt ** 3 / 3.0
+        dt2_2 = dt ** 2 / 2.0
+        self.Q = q * np.array([
+            [dt3_3, 0,     dt2_2, 0    ],
+            [0,     dt3_3, 0,     dt2_2],
+            [dt2_2, 0,     dt,    0    ],
+            [0,     dt2_2, 0,     dt   ]
+        ], dtype=np.float64)
 
         # --- Measurement noise R ---
         self.R = measurement_noise ** 2 * np.eye(2, dtype=np.float64)
@@ -522,7 +534,7 @@ class MixedMotionPredictor:
 
     def __init__(self, dt=1.0, process_noise_brownian=1.0,
                  process_noise_linear=0.5, process_noise_confined=1.0,
-                 measurement_noise=1.0, velocity_persistence=0.8,
+                 measurement_noise=1.0, velocity_persistence=1.0,
                  confinement_spring=0.1, transition_prob=0.1):
         self.dt = dt
         self.process_noise_brownian = process_noise_brownian

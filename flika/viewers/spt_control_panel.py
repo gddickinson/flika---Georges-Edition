@@ -191,8 +191,14 @@ class SPTControlPanel(QtWidgets.QDockWidget):
 
         layout.addLayout(form)
 
+        # U-Track advanced detection controls (hidden by default)
+        from .spt_detection_controls import (ThunderSTORMControlGroup,
+                                              UTrackDetectionControlGroup)
+        self.utrack_det_controls = UTrackDetectionControlGroup()
+        self.utrack_det_controls.setVisible(False)
+        layout.addWidget(self.utrack_det_controls)
+
         # ThunderSTORM control group (hidden by default)
-        from .spt_detection_controls import ThunderSTORMControlGroup
         self.ts_controls = ThunderSTORMControlGroup()
         self.ts_controls.setVisible(False)
         layout.addWidget(self.ts_controls)
@@ -600,6 +606,10 @@ class SPTControlPanel(QtWidgets.QDockWidget):
             self._on_det_method_changed)
         self.det_show_particles_btn.toggled.connect(self._on_toggle_particles)
         self.det_results_table_btn.clicked.connect(self._on_show_results_table)
+        self.utrack_det_controls.auto_psf_btn.clicked.connect(
+            self._on_auto_estimate_psf)
+        self.utrack_det_controls.auto_noise_btn.clicked.connect(
+            self._on_auto_estimate_noise)
 
         # Linking
         self.link_button.clicked.connect(self._on_link)
@@ -689,9 +699,11 @@ class SPTControlPanel(QtWidgets.QDockWidget):
         method = self.det_method_combo.currentText()
         is_ts = (method == 'ThunderSTORM')
         is_ai = (method == 'AI Localizer')
+        is_utrack = (method == 'U-Track')
 
-        # Show/hide ThunderSTORM-specific controls
+        # Show/hide method-specific controls
         self.ts_controls.setVisible(is_ts)
+        self.utrack_det_controls.setVisible(is_utrack)
 
         # Show/hide U-Track-specific controls
         self.det_alpha.setEnabled(not is_ts and not is_ai)
@@ -735,10 +747,12 @@ class SPTControlPanel(QtWidgets.QDockWidget):
 
             if method == 'U-Track':
                 from ..spt.detection.utrack_detector import UTrackDetector
+                adv = self.utrack_det_controls.get_params()
                 detector = UTrackDetector(
                     psf_sigma=psf_sigma,
                     alpha=alpha,
-                    min_intensity=min_intensity)
+                    min_intensity=min_intensity,
+                    **adv)
 
                 for f in range(n_frames):
                     frame_locs = detector.detect_frame(image_data[f])
@@ -858,6 +872,42 @@ class SPTControlPanel(QtWidgets.QDockWidget):
             self.det_progress.setValue(0)
         finally:
             self.det_button.setEnabled(True)
+
+    def _on_auto_estimate_psf(self):
+        """Estimate PSF sigma from the current image autocorrelation."""
+        win = self._current_window()
+        if win is None:
+            self.det_result_label.setText("No window selected.")
+            return
+        try:
+            image = np.asarray(win.image, dtype=np.float64)
+            if image.ndim == 3:
+                # Use the middle frame
+                image = image[image.shape[0] // 2]
+            from ..spt.detection.utrack_detector import UTrackDetector
+            sigma = UTrackDetector.auto_estimate_psf_sigma(image)
+            self.det_psf_sigma.setValue(sigma)
+            self.det_result_label.setText(
+                f"Auto-estimated PSF sigma: {sigma:.2f} px")
+        except Exception as exc:
+            self.det_result_label.setText(f"PSF estimation failed: {exc}")
+
+    def _on_auto_estimate_noise(self):
+        """Estimate image noise from the Laplacian MAD."""
+        win = self._current_window()
+        if win is None:
+            self.det_result_label.setText("No window selected.")
+            return
+        try:
+            image = np.asarray(win.image, dtype=np.float64)
+            if image.ndim == 3:
+                image = image[image.shape[0] // 2]
+            from ..spt.detection.utrack_detector import UTrackDetector
+            noise = UTrackDetector.auto_estimate_noise(image)
+            self.det_result_label.setText(
+                f"Auto-estimated noise: {noise:.2f}")
+        except Exception as exc:
+            self.det_result_label.setText(f"Noise estimation failed: {exc}")
 
     def _on_toggle_particles(self, checked):
         """Show or hide detected particle scatter points on the image."""
@@ -1006,14 +1056,15 @@ class SPTControlPanel(QtWidgets.QDockWidget):
                 self.link_progress.setValue(100)
 
             elif method == 'U-Track LAP':
-                from ..spt.linking.utrack_linker import UTrackLinker
+                from ..spt.linking.utrack_linker import (
+                    UTrackLinker, TrackingConfig)
                 utrack_config = self.utrack_controls.get_config()
-                linker = UTrackLinker(
+                config = TrackingConfig(
                     max_distance=max_distance,
                     max_gap=max_gap,
                     min_track_length=min_length,
-                    motion_model=utrack_config.get('motion_model', 'mixed'),
-                    num_tracking_rounds=utrack_config.get('num_tracking_rounds', 3))
+                    **utrack_config)
+                linker = UTrackLinker(config=config)
                 tracks, stats = linker.link(locs)
                 self.link_progress.setValue(100)
 
@@ -1591,10 +1642,12 @@ class SPTControlPanel(QtWidgets.QDockWidget):
             image_data = image_data[np.newaxis]
 
         # Detection
+        adv_det = self.utrack_det_controls.get_params()
         detector = UTrackDetector(
             psf_sigma=self.det_psf_sigma.value(),
             alpha=self.det_alpha.value(),
-            min_intensity=self.det_min_intensity.value())
+            min_intensity=self.det_min_intensity.value(),
+            **adv_det)
 
         all_locs = []
         for f in range(image_data.shape[0]):
@@ -1925,10 +1978,12 @@ class SPTControlPanel(QtWidgets.QDockWidget):
     # ------------------------------------------------------------------
 
     def set_detection_params(self, psf_sigma=None, alpha=None,
-                             min_intensity=None, method=None):
+                             min_intensity=None, method=None, **kwargs):
         """Programmatically set detection parameters.
 
-        Useful for scripts and macros.
+        Useful for scripts and macros.  Extra keyword arguments are
+        forwarded to the advanced U-Track detection controls
+        (dog_ratio, mixture_separation, local_bg_inner, local_bg_outer).
         """
         if method is not None:
             idx = self.det_method_combo.findText(method)
@@ -1940,10 +1995,16 @@ class SPTControlPanel(QtWidgets.QDockWidget):
             self.det_alpha.setValue(alpha)
         if min_intensity is not None:
             self.det_min_intensity.setValue(min_intensity)
+        if kwargs:
+            self.utrack_det_controls.set_params(kwargs)
 
     def set_linking_params(self, max_distance=None, max_gap=None,
-                           min_track_length=None, method=None):
-        """Programmatically set linking parameters."""
+                           min_track_length=None, method=None, **kwargs):
+        """Programmatically set linking parameters.
+
+        Extra keyword arguments are forwarded to the U-Track LAP
+        controls (all TrackingConfig fields).
+        """
         if method is not None:
             idx = self.link_method_combo.findText(method)
             if idx >= 0:
@@ -1954,6 +2015,8 @@ class SPTControlPanel(QtWidgets.QDockWidget):
             self.link_max_gap.setValue(max_gap)
         if min_track_length is not None:
             self.link_min_length.setValue(min_track_length)
+        if kwargs:
+            self.utrack_controls.set_config(kwargs)
 
     def set_analysis_params(self, pixel_size=None, frame_interval=None,
                             geometric=None, kinematic=None, spatial=None):

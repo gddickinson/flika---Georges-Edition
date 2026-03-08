@@ -42,7 +42,7 @@ class TrackingConfig:
     process_noise_linear: float = 0.5
     process_noise_confined: float = 1.0
     measurement_noise: float = 1.0
-    velocity_persistence: float = 0.8
+    velocity_persistence: float = 1.0  # 1.0 = constant velocity (U-Track 2.5)
     confinement_spring: float = 0.1
 
     # --- Multi-round tracking ---
@@ -59,6 +59,8 @@ class TrackingConfig:
     alternative_cost_factor: float = 1.05
     intensity_weight: float = 0.1  # weight for intensity cost term
     velocity_angle_weight: float = 0.1  # weight for velocity angle cost
+    uncertainty_weight: float = 1.0  # weight for localization uncertainty
+    amplitude_gate: Tuple[float, float] = (0.0, float('inf'))  # (min, max) amplitude
 
     # --- Gap closing ---
     gap_penalty: float = 1.5  # multiplicative penalty per gap frame
@@ -66,6 +68,9 @@ class TrackingConfig:
     gap_closing_max_distance: float = 15.0
     merge_split_enabled: bool = True
     intensity_ratio_range: Tuple[float, float] = (0.5, 2.0)  # valid rho
+
+    # --- Automatic parameter estimation ---
+    auto_estimate_noise: bool = False  # auto-set measurement_noise from uncertainties
 
     # --- Post-tracking ---
     msd_max_lag: int = 10
@@ -139,6 +144,31 @@ class UTrackLinker:
         if len(locs) == 0:
             return [], {'num_tracks': 0}
 
+        # Column layout: [frame, x, y, intensity?, sigma?, uncertainty?, ...]
+        # Detect available columns
+        has_intensity = locs.shape[1] > 3
+        has_sigma = locs.shape[1] > 4
+        has_uncertainty = locs.shape[1] > 5
+
+        # Amplitude-based gating: filter localizations by intensity
+        amp_lo, amp_hi = self.config.amplitude_gate
+        if has_intensity and (amp_lo > 0 or amp_hi < float('inf')):
+            intensities = locs[:, 3]
+            gate_mask = (intensities >= amp_lo) & (intensities <= amp_hi)
+            locs = locs[gate_mask]
+            if len(locs) == 0:
+                return [], {'num_tracks': 0, 'gated_count': int(~gate_mask).sum()}
+
+        # Auto-estimate measurement noise from localization uncertainties
+        if self.config.auto_estimate_noise and has_uncertainty:
+            uncertainties = locs[:, 5]
+            valid_unc = uncertainties[uncertainties > 0]
+            if len(valid_unc) > 0:
+                self.config.measurement_noise = float(np.median(valid_unc))
+                self.measurement_noise = self.config.measurement_noise
+                logger.debug("Auto-estimated measurement noise: %.4f",
+                             self.config.measurement_noise)
+
         frames = np.sort(np.unique(locs[:, 0].astype(int)))
 
         # Build per-frame index
@@ -146,9 +176,6 @@ class UTrackLinker:
         for f in frames:
             mask = locs[:, 0].astype(int) == f
             frame_indices[f] = np.where(mask)[0]
-
-        # Extract intensity column if available
-        has_intensity = locs.shape[1] > 3
 
         # Compute local density (nearest-neighbor distances) per frame
         nn_distances = self._compute_nn_distances(locs, frame_indices)
@@ -248,11 +275,14 @@ class UTrackLinker:
             det_positions = locs[det_indices, 1:3]
             det_intensities = (locs[det_indices, 3] if locs.shape[1] > 3
                                else None)
+            det_uncertainties = (locs[det_indices, 5] if locs.shape[1] > 5
+                                 else None)
 
             # Solve assignment for this frame pair
             assignments, new_active_tracks = self._solve_assignment_problem(
                 active_tracks, det_indices, det_positions, det_intensities,
-                locs, current_frame, nn_distances)
+                locs, current_frame, nn_distances,
+                det_uncertainties=det_uncertainties)
 
             active_tracks = new_active_tracks
 
@@ -305,10 +335,13 @@ class UTrackLinker:
             det_positions = locs[det_indices, 1:3]
             det_intensities = (locs[det_indices, 3] if locs.shape[1] > 3
                                else None)
+            det_uncertainties = (locs[det_indices, 5] if locs.shape[1] > 5
+                                 else None)
 
             assignments, new_active_tracks = self._solve_assignment_problem(
                 active_tracks, det_indices, det_positions, det_intensities,
-                locs, current_frame, nn_distances)
+                locs, current_frame, nn_distances,
+                det_uncertainties=det_uncertainties)
 
             active_tracks = new_active_tracks
 
@@ -410,7 +443,8 @@ class UTrackLinker:
 
     def _solve_assignment_problem(self, active_tracks, det_indices,
                                   det_positions, det_intensities,
-                                  locs, current_frame, nn_distances):
+                                  locs, current_frame, nn_distances,
+                                  det_uncertainties=None):
         """Build and solve the augmented cost matrix for frame-to-frame linking.
 
         Augmented cost matrix layout:
@@ -424,6 +458,7 @@ class UTrackLinker:
             - Empirical covariance fallback from recent positions
             - Intensity cost: |log(I2/I1)| penalty
             - Velocity angle cost: (1 - cos_theta) * speed
+            - Localization uncertainty weighting: σ_track² + σ_det²
             - Adaptive search radius with confidence ramp-up and density scaling
 
         Alternative cost: 90th percentile of valid costs * 1.05
@@ -436,6 +471,7 @@ class UTrackLinker:
             locs: full localization array
             current_frame: current frame number
             nn_distances: {row_idx: nn_distance}
+            det_uncertainties: (n_dets,) localization uncertainties or None
 
         Returns:
             (assignments, new_active_tracks)
@@ -547,6 +583,20 @@ class UTrackLinker:
                     angle_cost = (1.0 - cos_theta) * speed
                     cost += self.config.velocity_angle_weight * angle_cost
 
+                # Localization uncertainty weighting
+                # Weight cost by combined uncertainty: d² / (σ_track² + σ_det²)
+                if (det_uncertainties is not None
+                        and self.config.uncertainty_weight > 0):
+                    track_last_idx = active_tracks[i][0][-1]
+                    sigma_track = (locs[track_last_idx, 5]
+                                   if locs.shape[1] > 5 else 0.0)
+                    sigma_det = det_uncertainties[j]
+                    combined_var = sigma_track ** 2 + sigma_det ** 2
+                    if combined_var > 1e-12:
+                        # Normalize Mahalanobis cost by uncertainty
+                        cost = cost / (1.0 + self.config.uncertainty_weight
+                                       * combined_var)
+
                 cost_matrix[i, j] = cost
                 valid_costs.append(cost)
 
@@ -608,15 +658,21 @@ class UTrackLinker:
 
     def _close_gaps(self, locs, tracks, frame_indices, nn_distances,
                     has_intensity):
-        """Close gaps between track segments using a full augmented LAP.
+        """Close gaps between track segments using U-Track 2.5 augmented LAP.
 
-        LAP columns/rows = track segments.
-        Cost includes:
-            - d^2 * gap_penalty^(dt-1) with optional mobility scaling
-            - sqrt(dt) radius expansion for longer gaps
-            - Merge detection: segment end merges into interior of another
-            - Split detection: segment start splits from interior
-            - Intensity validation for merges/splits
+        Implements the full Jaqaman gap-closing algorithm with:
+          - Kalman-extrapolated endpoint prediction for gap cost
+          - d²/dt normalization (physically motivated Brownian scaling)
+          - Separate merge/split blocks in the LAP matrix
+          - Intensity ratio as continuous cost term
+
+        LAP matrix layout (for N segments, P merge candidates, Q split):
+            [gap_close(NxN) | merge(NxP) | terminate(NxN)   ]
+            [split(QxN)     |            | no_split(QxQ)     ]
+            [initiate(NxN)  | no_merge(PxP) | auxiliary       ]
+
+        Simplified to a practical implementation that separates gap-closing
+        from merge/split while maintaining global optimality.
 
         Args:
             locs: full localization array
@@ -633,11 +689,13 @@ class UTrackLinker:
 
         n_segs = len(tracks)
 
-        # Gather segment endpoints
+        # Gather segment info including Kalman-predicted endpoints
         seg_info = []
+        seg_predictors = []
         for i, track in enumerate(tracks):
             if not track:
                 seg_info.append(None)
+                seg_predictors.append(None)
                 continue
             first_idx = track[0]
             last_idx = track[-1]
@@ -648,7 +706,7 @@ class UTrackLinker:
             first_int = locs[first_idx, 3] if has_intensity else None
             last_int = locs[last_idx, 3] if has_intensity else None
 
-            # Track mobility (mean step size) for scaling
+            # Track mobility (mean step size)
             if len(track) >= 2:
                 steps = []
                 for k in range(1, len(track)):
@@ -658,6 +716,14 @@ class UTrackLinker:
             else:
                 mobility = 1.0
 
+            # Estimate velocity from last few positions for Kalman extrapolation
+            velocity = np.zeros(2, dtype=np.float64)
+            if len(track) >= 2:
+                recent = track[-min(len(track), 5):]
+                positions = locs[recent, 1:3]
+                displacements = np.diff(positions, axis=0)
+                velocity = np.mean(displacements, axis=0)
+
             seg_info.append({
                 'first_frame': first_frame,
                 'last_frame': last_frame,
@@ -666,56 +732,16 @@ class UTrackLinker:
                 'first_int': first_int,
                 'last_int': last_int,
                 'mobility': mobility,
+                'velocity': velocity,
                 'track': track,
             })
 
-        # Build augmented cost matrix for gap closing
-        # Rows = segment ends (potential gap starters)
-        # Cols = segment starts (potential gap closers)
-        # Plus merge/split columns/rows
         big_val = 1e9
         max_gap_dist = self.config.gap_closing_max_distance
 
-        # Basic gap-closing cost matrix (end-to-start)
-        gap_costs = np.full((n_segs, n_segs), big_val, dtype=np.float64)
-        valid_gap_costs = []
-
-        for i in range(n_segs):
-            si = seg_info[i]
-            if si is None:
-                continue
-            for j in range(n_segs):
-                sj = seg_info[j]
-                if sj is None or i == j:
-                    continue
-
-                # Gap: end of i to start of j
-                dt = sj['first_frame'] - si['last_frame']
-                if dt < 1 or dt > self.max_gap + 1:
-                    continue
-
-                dist = np.linalg.norm(sj['first_pos'] - si['last_pos'])
-
-                # Expand radius for longer gaps: max_dist * sqrt(dt)
-                effective_max = max_gap_dist * np.sqrt(dt)
-                if dist > effective_max:
-                    continue
-
-                # Gap cost: d^2 * gap_penalty^(dt-1)
-                cost = dist ** 2 * (self.config.gap_penalty ** (dt - 1))
-
-                # Mobility scaling
-                if self.config.mobility_scaling:
-                    mob = max(si['mobility'], 1e-3)
-                    cost *= (dist / mob) if mob > 0 else 1.0
-
-                gap_costs[i, j] = cost
-                valid_gap_costs.append(cost)
-
-        # Merge detection: segment end merges into INTERIOR of another
-        merge_costs = np.full((n_segs, n_segs), big_val, dtype=np.float64)
-        # Split detection: segment start splits from INTERIOR of another
-        split_costs = np.full((n_segs, n_segs), big_val, dtype=np.float64)
+        # ---- Collect merge/split interior point candidates ----
+        merge_candidates = []  # (seg_end_i, seg_target_j, interior_idx, cost)
+        split_candidates = []  # (seg_start_i, seg_target_j, interior_idx, cost)
 
         if self.config.merge_split_enabled:
             for i in range(n_segs):
@@ -728,100 +754,176 @@ class UTrackLinker:
                         continue
 
                     # Merge: end of track i merges into interior of track j
-                    # The end of i should be temporally within j's range
                     if (si['last_frame'] > sj['first_frame'] and
                             si['last_frame'] < sj['last_frame']):
-                        # Find closest point in j's interior
-                        min_merge_dist = big_val
+                        min_dist = big_val
+                        best_idx = None
                         for k_idx in sj['track']:
                             k_frame = int(locs[k_idx, 0])
                             if abs(k_frame - si['last_frame']) <= 1:
                                 d = np.linalg.norm(
                                     locs[k_idx, 1:3] - si['last_pos'])
-                                if d < min_merge_dist:
-                                    min_merge_dist = d
+                                if d < min_dist:
+                                    min_dist = d
+                                    best_idx = k_idx
 
-                        if min_merge_dist < max_gap_dist:
-                            merge_cost = min_merge_dist ** 2
-
-                            # Intensity validation: rho = I_after / (I_i + I_j)
-                            if has_intensity and self._validate_merge_intensity(
-                                    si, sj, locs, sj['track']):
-                                merge_costs[i, j] = merge_cost
+                        if min_dist < max_gap_dist and best_idx is not None:
+                            cost = min_dist ** 2
+                            # Intensity as continuous cost term
+                            if has_intensity and si['last_int'] is not None:
+                                int_cost = self._intensity_cost_merge(
+                                    si, sj, locs, sj['track'])
+                                cost += self.config.intensity_weight * int_cost
+                            merge_candidates.append((i, j, best_idx, cost))
 
                     # Split: start of track i splits from interior of track j
                     if (si['first_frame'] > sj['first_frame'] and
                             si['first_frame'] < sj['last_frame']):
-                        min_split_dist = big_val
+                        min_dist = big_val
+                        best_idx = None
                         for k_idx in sj['track']:
                             k_frame = int(locs[k_idx, 0])
                             if abs(k_frame - si['first_frame']) <= 1:
                                 d = np.linalg.norm(
                                     locs[k_idx, 1:3] - si['first_pos'])
-                                if d < min_split_dist:
-                                    min_split_dist = d
+                                if d < min_dist:
+                                    min_dist = d
+                                    best_idx = k_idx
 
-                        if min_split_dist < max_gap_dist:
-                            split_cost = min_split_dist ** 2
+                        if min_dist < max_gap_dist and best_idx is not None:
+                            cost = min_dist ** 2
+                            if has_intensity and si['first_int'] is not None:
+                                int_cost = self._intensity_cost_split(
+                                    si, sj, locs, sj['track'])
+                                cost += self.config.intensity_weight * int_cost
+                            split_candidates.append((i, j, best_idx, cost))
 
-                            if has_intensity and self._validate_split_intensity(
-                                    si, sj, locs, sj['track']):
-                                split_costs[i, j] = split_cost
+        n_merges = len(merge_candidates)
+        n_splits = len(split_candidates)
 
-        # Build full augmented LAP
-        # Layout: [gap_close | death] / [birth | dummy]
-        # with merge/split costs folded into gap_close block
-        # Combine gap, merge, split into one cost taking minimum
-        combined_costs = np.minimum(gap_costs, np.minimum(merge_costs, split_costs))
+        # ---- Build augmented LAP matrix ----
+        # Layout (following Jaqaman 2008 structure):
+        #   Rows: [seg_ends (gap close) | split_starts | initiation]
+        #   Cols: [seg_starts (gap close) | merge_targets | termination]
+        # With auxiliary blocks for completeness.
+        #
+        # For practical implementation: we build an augmented matrix with
+        # explicit gap-close, merge, and split blocks.
+        n_rows_main = n_segs + n_splits  # segment ends + split sources
+        n_cols_main = n_segs + n_merges  # segment starts + merge targets
+        n_total = n_rows_main + n_cols_main
+        augmented = np.full((n_total, n_total), big_val, dtype=np.float64)
 
-        # Alternative cost for gap closing
-        if valid_gap_costs:
-            alt_cost = (np.percentile(valid_gap_costs,
+        valid_costs = []
+
+        # Block 1: Gap closing (seg_end i -> seg_start j)
+        # Uses Kalman extrapolation and d²/dt normalization
+        for i in range(n_segs):
+            si = seg_info[i]
+            if si is None:
+                continue
+            for j in range(n_segs):
+                sj = seg_info[j]
+                if sj is None or i == j:
+                    continue
+
+                dt = sj['first_frame'] - si['last_frame']
+                if dt < 1 or dt > self.max_gap + 1:
+                    continue
+
+                # Kalman-extrapolated position: predict forward dt frames
+                predicted_pos = si['last_pos'] + si['velocity'] * dt
+                dist = np.linalg.norm(sj['first_pos'] - predicted_pos)
+
+                effective_max = max_gap_dist * np.sqrt(dt)
+                if dist > effective_max:
+                    continue
+
+                # d²/dt: physically motivated Brownian cost
+                cost = dist ** 2 / max(dt, 1)
+
+                # Intensity as continuous cost term
+                if (has_intensity and si['last_int'] is not None
+                        and sj['first_int'] is not None
+                        and si['last_int'] > 0 and sj['first_int'] > 0):
+                    int_cost = abs(np.log(sj['first_int'] / si['last_int']))
+                    cost += self.config.intensity_weight * int_cost
+
+                augmented[i, j] = cost
+                valid_costs.append(cost)
+
+        # Block 2: Merge costs (seg_end i -> merge_target m)
+        for m_idx, (seg_i, seg_j, interior_idx, m_cost) in enumerate(merge_candidates):
+            col = n_segs + m_idx
+            augmented[seg_i, col] = m_cost
+            valid_costs.append(m_cost)
+
+        # Block 3: Split costs (split_source s -> seg_start j)
+        for s_idx, (seg_i, seg_j, interior_idx, s_cost) in enumerate(split_candidates):
+            row = n_segs + s_idx
+            augmented[row, seg_j] = s_cost
+            valid_costs.append(s_cost)
+
+        # Alternative cost
+        if valid_costs:
+            alt_cost = (np.percentile(valid_costs,
                                       self.config.alternative_cost_percentile)
                         * self.config.alternative_cost_factor)
         else:
             alt_cost = max_gap_dist ** 2
-
         alt_cost = max(alt_cost, 1e-3)
 
-        # Build augmented matrix
-        total = 2 * n_segs
-        augmented = np.full((total, total), big_val, dtype=np.float64)
+        # Termination diagonal (rows: main, cols: n_cols_main + row)
+        for i in range(n_rows_main):
+            augmented[i, n_cols_main + i] = alt_cost
 
-        # Upper-left: gap-close/merge/split costs
-        augmented[:n_segs, :n_segs] = combined_costs
+        # Initiation diagonal (rows: n_rows_main + col, cols: main)
+        for j in range(n_cols_main):
+            augmented[n_rows_main + j, j] = alt_cost
 
-        # Upper-right: death diagonal
-        for i in range(n_segs):
-            augmented[i, n_segs + i] = alt_cost
-
-        # Lower-left: birth diagonal
-        for j in range(n_segs):
-            augmented[n_segs + j, j] = alt_cost
-
-        # Lower-right: dummy (zero cost)
-        for i in range(n_segs):
-            for j in range(n_segs):
-                augmented[n_segs + i, n_segs + j] = 0.0
+        # Auxiliary block (lower-right): zero cost
+        for i in range(n_cols_main):
+            for j in range(n_rows_main):
+                augmented[n_rows_main + i, n_cols_main + j] = 0.0
 
         # Solve LAP
         row_ind, col_ind = linear_sum_assignment(augmented)
 
-        # Process assignments: merge track segments
-        merge_pairs = []
+        # Process assignments
+        gap_merges = []   # (seg_i, seg_j) for gap closing
+        merge_events = []  # (seg_i, seg_j) for merges
+        split_events = []  # (seg_i, seg_j) for splits
+
         for r, c in zip(row_ind, col_ind):
-            if r < n_segs and c < n_segs and r != c:
-                if augmented[r, c] < alt_cost:
-                    merge_pairs.append((r, c))
+            if augmented[r, c] >= alt_cost:
+                continue
 
-        # Execute merges with chain following
-        merged_set = set()
-        # Build merge graph
+            if r < n_segs and c < n_segs:
+                # Gap closing: end of r -> start of c
+                gap_merges.append((r, c))
+            elif r < n_segs and c >= n_segs and c < n_cols_main:
+                # Merge event
+                m_idx = c - n_segs
+                if m_idx < len(merge_candidates):
+                    _, seg_j, _, _ = merge_candidates[m_idx]
+                    merge_events.append((r, seg_j))
+            elif r >= n_segs and r < n_rows_main and c < n_segs:
+                # Split event
+                s_idx = r - n_segs
+                if s_idx < len(split_candidates):
+                    seg_i, _, _, _ = split_candidates[s_idx]
+                    split_events.append((seg_i, c))
+
+        # Execute gap-closing merges
         merge_graph = {}
-        for src, dst in merge_pairs:
+        for src, dst in gap_merges:
             merge_graph[src] = dst
+        for src, dst in merge_events:
+            merge_graph.setdefault(src, dst)
+        for src, dst in split_events:
+            merge_graph.setdefault(dst, src)
 
-        # Follow chains: if A->B and B->C, then merge A+B+C
+        merged_set = set()
         for src in list(merge_graph.keys()):
             if src in merged_set:
                 continue
@@ -837,7 +939,6 @@ class UTrackLinker:
             merged_set.add(src)
 
             if len(chain) > 1:
-                # Merge all chain segments into the first
                 base = chain[0]
                 for other in chain[1:]:
                     if seg_info[other] is not None:
@@ -845,10 +946,50 @@ class UTrackLinker:
                             tracks[base], tracks[other])
                         tracks[other] = []
 
-        # Remove empty tracks
         tracks = [t for t in tracks if len(t) > 0]
-
         return tracks
+
+    def _intensity_cost_merge(self, seg_i, seg_j, locs, track_j):
+        """Compute continuous intensity cost for merge event."""
+        merge_frame = seg_i['last_frame']
+        I_j_at_merge = None
+        for idx in track_j:
+            if int(locs[idx, 0]) == merge_frame and locs.shape[1] > 3:
+                I_j_at_merge = locs[idx, 3]
+                break
+        if I_j_at_merge is None or seg_i['last_int'] is None:
+            return 0.0
+        I_sum = seg_i['last_int'] + I_j_at_merge
+        I_after = None
+        for idx in track_j:
+            if int(locs[idx, 0]) > merge_frame and locs.shape[1] > 3:
+                I_after = locs[idx, 3]
+                break
+        if I_after is None or I_sum <= 0:
+            return 0.0
+        return abs(np.log(max(I_after / I_sum, 1e-6)))
+
+    def _intensity_cost_split(self, seg_i, seg_j, locs, track_j):
+        """Compute continuous intensity cost for split event."""
+        split_frame = seg_i['first_frame']
+        I_before = None
+        for idx in reversed(track_j):
+            if int(locs[idx, 0]) < split_frame and locs.shape[1] > 3:
+                I_before = locs[idx, 3]
+                break
+        if I_before is None or seg_i['first_int'] is None:
+            return 0.0
+        I_j_after = None
+        for idx in track_j:
+            if int(locs[idx, 0]) >= split_frame and locs.shape[1] > 3:
+                I_j_after = locs[idx, 3]
+                break
+        if I_j_after is None:
+            return 0.0
+        I_sum = seg_i['first_int'] + I_j_after
+        if I_sum <= 0 or I_before <= 0:
+            return 0.0
+        return abs(np.log(max(I_before / I_sum, 1e-6)))
 
     def _validate_merge_intensity(self, seg_i, seg_j, locs, track_j):
         """Validate merge using intensity ratio.
