@@ -7,6 +7,7 @@ _STANDALONE_MODULES = {
     'test_macro_recorder', 'test_undo',
     'test_spt_detection', 'test_spt_linking', 'test_spt_features',
     'test_spt_io', 'test_spt_pipeline',
+    'test_ai',
 }
 
 _flikaApp = None

@@ -13,6 +13,12 @@ Test files:
 - ``test_settings_batch.py`` -- Settings and batch processing tests.
 - ``test_macro_recorder.py`` -- Macro recorder tests.
 - ``test_undo.py`` -- Undo/redo stack tests.
+- ``test_ai.py`` -- Non-GUI AI module tests: annotations (CRUD, YOLO/COCO/VOC
+  export/import), detection backend (image prep, NMS), feature extractor, PSF
+  simulator, classifier backends, denoiser utilities (65 tests, standalone).
+- ``test_ai_gui.py`` -- GUI tests for AI dialogs: pixel classifier, object
+  detection, particle localizer, denoiser, SAM, model zoo, annotation overlay,
+  paint overlay, menu integration, workers (60 tests, requires Qt app).
 - ``test_spt_*.py`` -- Single-particle tracking module tests.
 - ``test_macros.py`` -- Legacy plugin manager tests (excluded by default due to
   pre-existing PyQt6 issues).
