@@ -134,6 +134,19 @@ Image Processing
   methods: manual ROI, auto-detected ROI (dark-corner algorithm from
   spt_batch_analysis), and statistical (mean/median/mode/percentile).
   Supports per-frame or whole-stack subtraction.
+- **Deconvolution** (``Process > Deconvolution``) -- Richardson-Lucy iterative
+  deconvolution and Wiener (frequency-domain) deconvolution with built-in
+  Gaussian and Airy disk PSF generation.
+- **Image Stitching** (``Process > Stitch Images``) -- phase cross-correlation
+  registration with configurable overlap and linear blending.  Supports
+  horizontal/vertical stitching of 2-D images and 3-D stacks.
+- **Bleach Correction** (``Process > Filters > Bleach Correction``) -- three
+  methods: exponential fit, histogram matching, and ratio-to-mean.
+- **Color Space Conversions** (``Image > Color``) -- RGB to/from HSV, LAB,
+  YCrCb.  Grayscale conversion with luminance, average, or lightness methods.
+- **Batch Export** (``Process > Export > Batch Export``) -- export all open
+  windows as TIFF, PNG, or NumPy arrays.  Stacks can be exported as image
+  sequences.
 - **Enhanced Overlays** -- Timestamp and Scale Bar overlays auto-populate from
   ``pixel_size`` and ``frame_interval`` settings.  Full customization:
   font size, 8 preset colors + custom color picker, background colors,
@@ -158,9 +171,14 @@ Settings & Usability
 - **26 settings**, all verified operational, accessible via ``File > Settings``:
   pixel size, frame interval, acceleration device, GPU memory limit, debug mode,
   auto-export provenance, ROI colors/sizes, point settings, axis order, and more.
+- **Keyboard shortcuts** -- ``Ctrl+O`` open, ``Ctrl+S`` save, ``Ctrl+W`` close,
+  ``Ctrl+D`` duplicate, ``Ctrl+G`` gaussian blur, ``Ctrl+T`` threshold,
+  ``Left/Right`` frame navigation, ``Home/End`` first/last frame.
 - **Debug mode** -- toggles logger to DEBUG level for detailed diagnostics.
 - **Built-in documentation** with 14 comprehensive user manual pages.
 - **Secure credential storage** via system keyring with "Delete API Key" button.
+- **Plugin Manager** -- enable/disable plugins, suppress startup messages,
+  download plugins from configurable GitHub repository, remove installed plugins.
 
 
 Credits

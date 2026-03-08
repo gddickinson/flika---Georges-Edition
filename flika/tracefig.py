@@ -391,29 +391,42 @@ def roiPlot(roi):
 
 
 class RedrawPartialThread(QtCore.QThread):
-    finished=QtCore.Signal() #this announces that the thread has finished
-    finished_sig=QtCore.Signal() #This tells the thread to finish
+    finished=QtCore.Signal()
+    finished_sig=QtCore.Signal()
     alert = QtCore.Signal(str)
-    updated = QtCore.Signal() #This signal is emitted after each redraw
+    updated = QtCore.Signal()
+    redraw_requested = QtCore.Signal()
 
     def __init__(self,tracefig):
         QtCore.QThread.__init__(self)
         self.tracefig=tracefig
         self.redrawCompleted=True
         self.quit_loop=False
-        
+        self._pending = False
+
     def run(self):
         self.finished_sig.connect(self.request_quit_loop)
-        while self.quit_loop is False:
-            time.sleep(.05)
-            self.redraw()
-            self.updated.emit()
+        self.redraw_requested.connect(self._on_redraw_requested, QtCore.Qt.QueuedConnection)
+        self.exec()
         self.alert.emit("Finished Redraw")
         self.finished.emit()
-        
+
     def request_quit_loop(self):
         self.quit_loop=True
-        
+        self.quit()
+
+    def request_redraw(self):
+        """Called from the main thread to schedule a redraw."""
+        if not self._pending:
+            self._pending = True
+            self.redraw_requested.emit()
+
+    def _on_redraw_requested(self):
+        self._pending = False
+        if not self.quit_loop:
+            self.redraw()
+            self.updated.emit()
+
     def redraw(self):
         if self.redrawCompleted is False:
             self.alert.emit("Redraw hasn't finished")
@@ -434,7 +447,7 @@ class RedrawPartialThread(QtCore.QThread):
                 trace=roi.getTrace(bounds)
                 traces.append(trace)
             for i, roi_index in enumerate(idxs):
-                trace=traces[i] #This function can sometimes take a long time.  
+                trace=traces[i]
                 pen=QtGui.QPen(self.tracefig.rois[roi_index]['roi'].pen)
                 bb=self.tracefig.getBounds()
                 curve=self.tracefig.rois[roi_index]['p1trace']

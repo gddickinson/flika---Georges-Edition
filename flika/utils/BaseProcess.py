@@ -488,8 +488,10 @@ class BaseProcess(object):
                 output_shape=tuple(newWindow.image.shape) if newWindow is not None else (),
             )
         _status_msg('Finished with {}.'.format(self.__name__))
-        del self.tif
-        del self.newtif
+        if hasattr(self, 'tif'):
+            del self.tif
+        if hasattr(self, 'newtif'):
+            del self.newtif
         return newWindow
 
     def gui(self):

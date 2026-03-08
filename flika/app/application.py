@@ -245,7 +245,10 @@ class FlikaApplication(QtWidgets.QMainWindow):
     def _make_menu(self):
         logger.debug("Started 'app.application.FlikaApplication._make_menu()'")
         from ..roi import open_rois
-        from ..process.file_ import open_file, open_file_from_gui, open_image_sequence_from_gui, open_points, open_spt_results, save_file, save_movie_gui, save_points, save_rois
+        from ..process.file_ import open_file, open_file_from_gui, open_image_sequence_from_gui, open_points, open_spt_results, save_file, save_movie_gui, save_points, save_rois, close
+        from ..process.stacks import duplicate
+        from ..process.filters import gaussian_blur
+        from ..process.binary import threshold
         fileMenu = self.menuBar().addMenu('File')
         openMenu = fileMenu.addMenu("Open")
         openMenu.addAction("Open Image/Movie", open_file_from_gui)
@@ -287,6 +290,42 @@ class FlikaApplication(QtWidgets.QMainWindow):
         undoAction.setShortcut('Ctrl+Z')
         redoAction = editMenu.addAction("&Redo", self._redo)
         redoAction.setShortcut('Ctrl+Shift+Z')
+
+        # File shortcuts
+        openAction = QtWidgets.QAction("&Open", self, triggered=lambda: open_file_from_gui())
+        openAction.setShortcut('Ctrl+O')
+        self.addAction(openAction)
+        saveAction = QtWidgets.QAction("&Save", self, triggered=lambda: save_file())
+        saveAction.setShortcut('Ctrl+S')
+        self.addAction(saveAction)
+        closeAction = QtWidgets.QAction("Close Window", self, triggered=lambda: close() if g.win else None)
+        closeAction.setShortcut('Ctrl+W')
+        self.addAction(closeAction)
+
+        # Navigation shortcuts
+        nextFrameAction = QtWidgets.QAction("Next Frame", self, triggered=self._next_frame)
+        nextFrameAction.setShortcut('Right')
+        self.addAction(nextFrameAction)
+        prevFrameAction = QtWidgets.QAction("Previous Frame", self, triggered=self._prev_frame)
+        prevFrameAction.setShortcut('Left')
+        self.addAction(prevFrameAction)
+        firstFrameAction = QtWidgets.QAction("First Frame", self, triggered=self._first_frame)
+        firstFrameAction.setShortcut('Home')
+        self.addAction(firstFrameAction)
+        lastFrameAction = QtWidgets.QAction("Last Frame", self, triggered=self._last_frame)
+        lastFrameAction.setShortcut('End')
+        self.addAction(lastFrameAction)
+
+        # View shortcuts
+        dupAction = QtWidgets.QAction("Duplicate", self, triggered=lambda: duplicate() if g.win else None)
+        dupAction.setShortcut('Ctrl+D')
+        self.addAction(dupAction)
+        gaussAction = QtWidgets.QAction("Gaussian Blur", self, triggered=lambda: gaussian_blur.gui() if g.win else None)
+        gaussAction.setShortcut('Ctrl+G')
+        self.addAction(gaussAction)
+        threshAction = QtWidgets.QAction("Threshold", self, triggered=lambda: threshold.gui() if g.win else None)
+        threshAction.setShortcut('Ctrl+T')
+        self.addAction(threshAction)
 
         viewMenu = self.menuBar().addMenu('View')
         viewMenu.addAction('Orthogonal Views', lambda: g.win and g.win.toggleOrthogonalViews())
@@ -340,6 +379,26 @@ class FlikaApplication(QtWidgets.QMainWindow):
     def _redo(self):
         from ..core.undo import undo_stack
         undo_stack.redo()
+
+    def _next_frame(self):
+        if g.win and hasattr(g.win, 'image') and g.win.image.ndim >= 3:
+            idx = g.win.currentIndex + 1
+            if idx < g.win.mt:
+                g.win.setIndex(idx)
+
+    def _prev_frame(self):
+        if g.win and hasattr(g.win, 'image') and g.win.image.ndim >= 3:
+            idx = g.win.currentIndex - 1
+            if idx >= 0:
+                g.win.setIndex(idx)
+
+    def _first_frame(self):
+        if g.win and hasattr(g.win, 'image') and g.win.image.ndim >= 3:
+            g.win.setIndex(0)
+
+    def _last_frame(self):
+        if g.win and hasattr(g.win, 'image') and g.win.image.ndim >= 3:
+            g.win.setIndex(g.win.mt - 1)
 
     def _toggle_roi_manager(self):
         from .roi_manager import ROIManager

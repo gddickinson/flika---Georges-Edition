@@ -7,7 +7,8 @@ from .. import global_vars as g
 from ..window import Window
 from ..utils.BaseProcess import BaseProcess, WindowSelector, MissingWindowError, CheckBox, ComboBox, SliderLabel
 
-__all__ = ['split_channels', 'Split_channels', 'blend_channels']
+__all__ = ['split_channels', 'Split_channels', 'blend_channels',
+           'convert_color_space', 'grayscale']
 
 
 class Split_channels(BaseProcess):
@@ -152,6 +153,118 @@ class Blend_Channels(BaseProcess):
 
 
 blend_channels = Blend_Channels()
+
+
+class Convert_Color_Space(BaseProcess):
+    """convert_color_space(conversion, keepSourceWindow=False)
+
+    Converts an RGB image between color spaces.
+
+    Parameters:
+        conversion (str): Color space conversion.
+            'RGB to HSV', 'HSV to RGB', 'RGB to LAB', 'LAB to RGB',
+            'RGB to YCrCb', 'YCrCb to RGB'.
+    Returns:
+        newWindow
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        conversion = ComboBox()
+        conversion.addItems(['RGB to HSV', 'HSV to RGB',
+                             'RGB to LAB', 'LAB to RGB',
+                             'RGB to YCrCb', 'YCrCb to RGB'])
+        self.items.append({'name': 'conversion', 'string': 'Conversion', 'object': conversion})
+        super().gui()
+
+    def __call__(self, conversion='RGB to HSV', keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        from skimage import color as skcolor
+        tif = self.tif.astype(np.float64)
+
+        converters = {
+            'RGB to HSV': skcolor.rgb2hsv,
+            'HSV to RGB': skcolor.hsv2rgb,
+            'RGB to LAB': skcolor.rgb2lab,
+            'LAB to RGB': skcolor.lab2rgb,
+            'RGB to YCrCb': lambda x: skcolor.rgb2ycbcr(x) if hasattr(skcolor, 'rgb2ycbcr') else x,
+            'YCrCb to RGB': lambda x: skcolor.ycbcr2rgb(x) if hasattr(skcolor, 'ycbcr2rgb') else x,
+        }
+
+        convert_fn = converters.get(conversion)
+        if convert_fn is None:
+            g.alert(f'Unknown conversion: {conversion}')
+            return None
+
+        # Normalize to 0-1 for skimage color conversions that expect it
+        if conversion.startswith('RGB'):
+            vmin, vmax = tif.min(), tif.max()
+            if vmax - vmin > 0:
+                tif = (tif - vmin) / (vmax - vmin)
+
+        if tif.ndim == 3 and tif.shape[-1] in (3, 4):
+            self.newtif = convert_fn(tif[..., :3])
+        elif tif.ndim == 4 and tif.shape[-1] in (3, 4):
+            result = np.zeros(tif.shape[:3] + (3,), dtype=np.float64)
+            for t in range(tif.shape[0]):
+                result[t] = convert_fn(tif[t, ..., :3])
+            self.newtif = result
+        else:
+            g.alert('Color conversion requires an RGB image (last dim = 3 or 4).')
+            return None
+
+        self.newname = self.oldname + f' - {conversion}'
+        return self.end()
+
+
+convert_color_space = Convert_Color_Space()
+
+
+class Grayscale(BaseProcess):
+    """grayscale(method, keepSourceWindow=False)
+
+    Converts an RGB image to grayscale.
+
+    Parameters:
+        method (str): 'Luminance' (standard weighted), 'Average', or 'Lightness'.
+    Returns:
+        newWindow
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        method = ComboBox()
+        method.addItems(['Luminance', 'Average', 'Lightness'])
+        self.items.append({'name': 'method', 'string': 'Method', 'object': method})
+        super().gui()
+
+    def __call__(self, method='Luminance', keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        tif = self.tif.astype(np.float64)
+
+        if tif.ndim < 3 or tif.shape[-1] not in (3, 4):
+            g.alert('Grayscale conversion requires an RGB image.')
+            return None
+
+        rgb = tif[..., :3]
+        if method == 'Luminance':
+            self.newtif = 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
+        elif method == 'Average':
+            self.newtif = rgb.mean(axis=-1)
+        elif method == 'Lightness':
+            self.newtif = (rgb.max(axis=-1) + rgb.min(axis=-1)) / 2
+        else:
+            self.newtif = rgb.mean(axis=-1)
+
+        self.newname = self.oldname + ' - Grayscale'
+        return self.end()
+
+
+grayscale = Grayscale()
 
 
 logger.debug("Completed 'reading process/color.py'")

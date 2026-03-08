@@ -69,9 +69,9 @@ class Connected_Components(BaseProcess):
             return None
         self.newtif = _connected_components_impl(np.copy(self.tif), connectivity)
         self.newname = self.oldname + ' - Connected Components'
+        count = int(self.newtif.max())
         w = self.end()
         if w is not None:
-            count = int(self.newtif.max())
             w.metadata['connected_component_count'] = count
             g.status_msg(f'Found {count} connected components')
         return w

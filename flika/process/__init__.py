@@ -23,6 +23,8 @@ from .mask_editor import *
 from .export import *
 from .linescan import *
 from .background_sub import *
+from .deconvolution import *
+from .stitching import *
 
 def _show_overlay_manager():
     """Open the Overlay Manager dock widget from the menu."""
@@ -95,6 +97,9 @@ def setup_menus():
     addAction(colorMenu, "Split Channels", split_channels.gui)
     addAction(colorMenu, "Blend Channels", blend_channels.gui)
     addAction(colorMenu, "Channel Compositor", channel_compositor.gui)
+    colorMenu.addSeparator()
+    addAction(colorMenu, "Convert Color Space", convert_color_space.gui)
+    addAction(colorMenu, "Grayscale", grayscale.gui)
 
     # ---- Image > Measure ----
     measureMenu = imageMenu.addMenu("Measure")
@@ -192,6 +197,7 @@ def setup_menus():
     filtersMenu.addSeparator()
     addAction(filtersMenu, "TV Denoising", tv_denoise.gui)
     addAction(filtersMenu, "Flash Remover", flash_remover.gui)
+    addAction(filtersMenu, "Bleach Correction", bleach_correction.gui)
 
     processMenu.addAction(QtWidgets.QAction("Image Calculator", processMenu, triggered=image_calculator.gui))
     addAction(processMenu, "Background Subtraction", background_subtract.gui)
@@ -229,8 +235,19 @@ def setup_menus():
     sptMenu.addSeparator()
     addAction(sptMenu, "Results Table", _show_results_table)
 
+    # ---- Process > Deconvolution ----
+    deconvMenu = processMenu.addMenu("Deconvolution")
+    addAction(deconvMenu, "Richardson-Lucy", richardson_lucy.gui)
+    addAction(deconvMenu, "Wiener Deconvolution", wiener_deconvolution.gui)
+    addAction(deconvMenu, "Generate PSF", generate_psf.gui)
+
+    # ---- Process > Stitching ----
+    addAction(processMenu, "Stitch Images", stitch_images.gui)
+
     # ---- Process > Export ----
-    addAction(processMenu, "Export Video", video_exporter.gui)
+    exportMenu = processMenu.addMenu("Export")
+    addAction(exportMenu, "Export Video", video_exporter.gui)
+    addAction(exportMenu, "Batch Export", batch_export.gui)
 
     g.menus.append(imageMenu)
     g.menus.append(processMenu)

@@ -10,7 +10,7 @@ from ..window import Window
 from ..utils.BaseProcess import BaseProcess_noPriorWindow, BaseProcess, WindowSelector, SliderLabel, CheckBox, ComboBox
 from ..utils.misc import save_file_gui
 
-__all__ = ['video_exporter']
+__all__ = ['video_exporter', 'batch_export']
 
 
 class Video_Exporter(BaseProcess_noPriorWindow):
@@ -173,5 +173,108 @@ class Video_Exporter(BaseProcess_noPriorWindow):
 
 
 video_exporter = Video_Exporter()
+
+class Batch_Export(BaseProcess_noPriorWindow):
+    """batch_export()
+
+    Exports all open windows as image files (TIFF, PNG, or NumPy).
+    Can also export stacks as image sequences.
+
+    Opens a dialog to configure export settings.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        fmt = ComboBox()
+        fmt.addItems(['TIFF', 'PNG', 'NumPy (.npy)'])
+        seq = CheckBox()
+        seq.setChecked(False)
+        self.items.append({'name': 'format', 'string': 'Format', 'object': fmt})
+        self.items.append({'name': 'as_sequence', 'string': 'Export Stacks as Sequences', 'object': seq})
+        super().gui()
+        self.ui.bbox.clear()
+        export_btn = QtWidgets.QPushButton('Export All')
+        export_btn.clicked.connect(self._do_export)
+        cancel_btn = QtWidgets.QPushButton('Cancel')
+        cancel_btn.clicked.connect(self.ui.reject)
+        self.ui.bbox.addButton(export_btn, QtWidgets.QDialogButtonBox.AcceptRole)
+        self.ui.bbox.addButton(cancel_btn, QtWidgets.QDialogButtonBox.RejectRole)
+
+    def _do_export(self):
+        fmt = self.getValue('format')
+        as_seq = self.getValue('as_sequence')
+
+        out_dir = QtWidgets.QFileDialog.getExistingDirectory(
+            None, "Select Output Directory")
+        if not out_dir:
+            return
+
+        windows = [w for w in g.windows if w.isVisible()]
+        if not windows:
+            g.alert("No open windows to export.")
+            return
+
+        ext_map = {'TIFF': '.tif', 'PNG': '.png', 'NumPy (.npy)': '.npy'}
+        ext = ext_map.get(fmt, '.tif')
+
+        exported = 0
+        for win in windows:
+            base = win.name.replace(' ', '_').replace('/', '_')
+            img = win.image
+
+            if as_seq and img.ndim >= 3 and ext != '.npy':
+                # Export each frame separately
+                seq_dir = os.path.join(out_dir, base)
+                os.makedirs(seq_dir, exist_ok=True)
+                for t in range(img.shape[0]):
+                    frame_path = os.path.join(seq_dir, f'frame_{t:05d}{ext}')
+                    self._save_frame(img[t], frame_path, fmt)
+                    exported += 1
+            else:
+                filepath = os.path.join(out_dir, base + ext)
+                self._save_image(img, filepath, fmt)
+                exported += 1
+
+        g.status_msg(f'Exported {exported} files to {out_dir}')
+        self.ui.accept()
+
+    def _save_image(self, img, path, fmt):
+        if fmt == 'NumPy (.npy)':
+            np.save(path, img)
+        elif fmt == 'TIFF':
+            import tifffile
+            tifffile.imwrite(path, img.astype(np.float32))
+        elif fmt == 'PNG':
+            from skimage.io import imsave
+            # Normalize to uint8 for PNG
+            frame = img if img.ndim == 2 else img[0] if img.ndim >= 3 else img
+            fmin, fmax = frame.min(), frame.max()
+            if fmax - fmin > 0:
+                frame = ((frame - fmin) / (fmax - fmin) * 255).astype(np.uint8)
+            else:
+                frame = np.zeros_like(frame, dtype=np.uint8)
+            imsave(path, frame)
+
+    def _save_frame(self, frame, path, fmt):
+        if fmt == 'TIFF':
+            import tifffile
+            tifffile.imwrite(path, frame.astype(np.float32))
+        elif fmt == 'PNG':
+            from skimage.io import imsave
+            fmin, fmax = frame.min(), frame.max()
+            if fmax - fmin > 0:
+                frame = ((frame - fmin) / (fmax - fmin) * 255).astype(np.uint8)
+            else:
+                frame = np.zeros_like(frame, dtype=np.uint8)
+            imsave(path, frame)
+
+    def __call__(self):
+        self.gui()
+
+
+batch_export = Batch_Export()
+
 
 logger.debug("Completed 'reading process/export.py'")

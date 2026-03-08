@@ -10,7 +10,7 @@ from ..utils.ndim import per_plane
 from scipy.ndimage import uniform_filter1d, median_filter as nd_median_filter
 from scipy.fft import fft as sp_fft, ifft as sp_ifft, fftfreq as sp_fftfreq
 
-__all__ = ['gaussian_blur', 'difference_of_gaussians', 'mean_filter', 'variance_filter', 'median_filter', 'butterworth_filter', 'boxcar_differential_filter','wavelet_filter','difference_filter', 'fourier_filter', 'bilateral_filter', 'sobel_filter', 'laplacian_filter', 'gaussian_laplace_filter', 'gaussian_gradient_magnitude_filter', 'sato_tubeness', 'meijering_neuriteness', 'hessian_filter', 'gabor_filter', 'maximum_filter', 'minimum_filter', 'percentile_filter', 'tv_denoise', 'flash_remover']
+__all__ = ['gaussian_blur', 'difference_of_gaussians', 'mean_filter', 'variance_filter', 'median_filter', 'butterworth_filter', 'boxcar_differential_filter','wavelet_filter','difference_filter', 'fourier_filter', 'bilateral_filter', 'sobel_filter', 'laplacian_filter', 'gaussian_laplace_filter', 'gaussian_gradient_magnitude_filter', 'sato_tubeness', 'meijering_neuriteness', 'hessian_filter', 'gabor_filter', 'maximum_filter', 'minimum_filter', 'percentile_filter', 'tv_denoise', 'flash_remover', 'bleach_correction']
 ###############################################################################
 ##################   SPATIAL FILTERS       ####################################
 ###############################################################################
@@ -1932,7 +1932,7 @@ class Flash_Remover(BaseProcess):
 
     def _linear_interpolation(self, tif, flash_start, flash_end):
         """Replace flash frames by linearly interpolating between pre/post flash frames."""
-        result = tif.copy().astype(np.float64)
+        result = tif.astype(np.float64)
         if tif.ndim < 3:
             return result
         mt = tif.shape[0]
@@ -1952,7 +1952,7 @@ class Flash_Remover(BaseProcess):
 
     def _noise_scaling(self, tif, flash_start, flash_end, window_size):
         """Scale flash frames by baseline noise ratio."""
-        result = tif.copy().astype(np.float64)
+        result = tif.astype(np.float64)
         if tif.ndim < 3:
             return result
         mt = tif.shape[0]
@@ -2031,11 +2031,98 @@ flash_remover = Flash_Remover()
 
 
 
-#from scipy import signal
-#data=g.currentTrace.rois[0]['roi'].getTrace()
-#wavelet = signal.ricker
-#widths = np.arange(1, 200)
-#cwtmatr = signal.cwt(data, wavelet, widths)
-#import pyqtgraph as pg
-#i=pg.image(cwtmatr.T)
-#i.view.setAspectLocked(lock=True, ratio=cwtmatr.shape[0]/cwtmatr.shape[1]*20)
+###############################################################################
+##################   BLEACH CORRECTION       ##################################
+###############################################################################
+
+
+class Bleach_Correction(BaseProcess):
+    """bleach_correction(method, keepSourceWindow=False)
+
+    Corrects photobleaching in time-series data.
+
+    Parameters:
+        method (str): Correction method.
+            'Exponential Fit' — fits and divides by an exponential decay.
+            'Histogram Matching' — matches each frame's histogram to the first frame.
+            'Ratio to Mean' — divides each frame by its mean, then multiplies by the stack mean.
+    Returns:
+        newWindow
+    """
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        from ..utils.BaseProcess import ComboBox
+        method = ComboBox()
+        method.addItems(['Exponential Fit', 'Histogram Matching', 'Ratio to Mean'])
+        self.items.append({'name': 'method', 'string': 'Method', 'object': method})
+        super().gui()
+
+    def __call__(self, method='Exponential Fit', keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        if self.tif.ndim < 3:
+            g.alert('Bleach correction requires a 3D time series.')
+            return None
+        tif = self.tif.astype(np.float64)
+        if method == 'Exponential Fit':
+            self.newtif = self._exponential_fit(tif)
+        elif method == 'Histogram Matching':
+            self.newtif = self._histogram_match(tif)
+        elif method == 'Ratio to Mean':
+            self.newtif = self._ratio_to_mean(tif)
+        else:
+            self.newtif = tif
+        self.newname = self.oldname + ' - Bleach Corrected'
+        return self.end()
+
+    def _exponential_fit(self, tif):
+        from scipy.optimize import curve_fit
+        mt = tif.shape[0]
+        mean_trace = np.array([tif[t].mean() for t in range(mt)])
+        t_vals = np.arange(mt, dtype=np.float64)
+
+        def exp_decay(t, a, b, c):
+            return a * np.exp(-b * t) + c
+
+        try:
+            p0 = [mean_trace[0] - mean_trace[-1], 0.01, mean_trace[-1]]
+            popt, _ = curve_fit(exp_decay, t_vals, mean_trace, p0=p0, maxfev=5000)
+            fit = exp_decay(t_vals, *popt)
+            fit = np.maximum(fit, 1e-10)
+            correction = fit[0] / fit
+        except Exception:
+            # Fallback: simple ratio correction
+            correction = mean_trace[0] / np.maximum(mean_trace, 1e-10)
+
+        result = np.zeros_like(tif)
+        for t in range(mt):
+            result[t] = tif[t] * correction[t]
+        return result
+
+    def _histogram_match(self, tif):
+        from skimage.exposure import match_histograms
+        mt = tif.shape[0]
+        ref = tif[0]
+        result = np.zeros_like(tif)
+        result[0] = ref
+        for t in range(1, mt):
+            result[t] = match_histograms(tif[t], ref)
+        return result
+
+    def _ratio_to_mean(self, tif):
+        mt = tif.shape[0]
+        global_mean = tif.mean()
+        result = np.zeros_like(tif)
+        for t in range(mt):
+            frame_mean = tif[t].mean()
+            if frame_mean > 1e-10:
+                result[t] = tif[t] * (global_mean / frame_mean)
+            else:
+                result[t] = tif[t]
+        return result
+
+
+bleach_correction = Bleach_Correction()
+

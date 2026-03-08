@@ -456,10 +456,20 @@ class Window(QtWidgets.QWidget):
             self.imageview.ui.graphicsView.removeItem(self.scatterPlot)
         pointSize = g.settings['point_size']
         pointColor = QtGui.QColor(g.settings['point_color'])
-        self.scatterPlot = pg.ScatterPlotItem(size=pointSize, pen=pg.mkPen([0, 0, 0, 255]), brush=pg.mkBrush(*pointColor.getRgb()))  #this is the plot that all the red points will be drawn on
+        self.scatterPlot = pg.ScatterPlotItem(size=pointSize, pen=pg.mkPen([0, 0, 0, 255]), brush=pg.mkBrush(*pointColor.getRgb()))
         self.scatterPoints = [[] for _ in np.arange(self.mt)]
+        self._brushCache = {}
         self.scatterPlot.sigClicked.connect(self.clickedScatter)
         self.imageview.addItem(self.scatterPlot)
+
+    def _getCachedBrush(self, color):
+        """Return a cached pg.mkBrush for the given QColor to avoid recreating brushes."""
+        rgba = color.getRgb()
+        brush = self._brushCache.get(rgba)
+        if brush is None:
+            brush = pg.mkBrush(*rgba)
+            self._brushCache[rgba] = brush
+        return brush
 
     def _init_menu(self):
         self.menu = QtWidgets.QMenu(self)
@@ -634,7 +644,7 @@ class Window(QtWidgets.QWidget):
             self.currentIndex = t
             if not g.settings['show_all_points']:
                 pointSizes = [pt[3] for pt in self.scatterPoints[t]]
-                brushes = [pg.mkBrush(*pt[2].getRgb()) for pt in self.scatterPoints[t]]
+                brushes = [self._getCachedBrush(pt[2]) for pt in self.scatterPoints[t]]
                 self.scatterPlot.setData(pos=self.scatterPoints[t], size=pointSizes, brush=brushes)
             self.sigTimeChanged.emit(t)
 
@@ -809,13 +819,13 @@ class Window(QtWidgets.QWidget):
                 self.scatterPoints[t] = [p for p in self.scatterPoints[t] if not (x == p[0] and y == p[1])]
                 pts.extend(self.scatterPoints[t])
             pointSizes = [pt[3] for pt in pts]
-            brushes = [pg.mkBrush(*pt[2].getRgb()) for pt in pts]
+            brushes = [self._getCachedBrush(pt[2]) for pt in pts]
             self.scatterPlot.setData(pos=pts, size=pointSizes, brush=brushes)
         else:
             t = self.currentIndex
             self.scatterPoints[t] = [p for p in self.scatterPoints[t] if not (x == p[0] and y == p[1])]
             pointSizes = [pt[3] for pt in self.scatterPoints[t]]
-            brushes = [pg.mkBrush(*pt[2].getRgb()) for pt in self.scatterPoints[t]]
+            brushes = [self._getCachedBrush(pt[2]) for pt in self.scatterPoints[t]]
             self.scatterPlot.setData(pos=self.scatterPoints[t], size=pointSizes, brush=brushes)
 
     def getScatterPts(self):
@@ -824,12 +834,18 @@ class Window(QtWidgets.QWidget):
         Returns:
             numpy array: an Nx3 array of scatter points, where N is the number of points. Col0 is frame, Col1 is x, Col2 is y. 
         """
-        p_out=[]
-        p_in=self.scatterPoints
-        for t in np.arange(len(p_in)):
-            for p in p_in[t]:
-                p_out.append(np.array([t,p[0],p[1]]))
-        p_out=np.array(p_out)
+        p_in = self.scatterPoints
+        n_total = sum(len(pts) for pts in p_in)
+        if n_total == 0:
+            return np.empty((0, 3))
+        p_out = np.empty((n_total, 3))
+        idx = 0
+        for t, pts in enumerate(p_in):
+            for p in pts:
+                p_out[idx, 0] = t
+                p_out[idx, 1] = p[0]
+                p_out[idx, 2] = p[1]
+                idx += 1
         return p_out
 
     def plotAllROIs(self):
@@ -853,13 +869,12 @@ class Window(QtWidgets.QWidget):
         pointColor = QtGui.QColor(g.settings['point_color'])
         position=[x, y, pointColor, pointSize]
         self.scatterPoints[t].append(position)
-        self.scatterPlot.addPoints(pos=[[x, y]], size=pointSize, brush=pg.mkBrush(*pointColor.getRgb()))
+        self.scatterPlot.addPoints(pos=[[x, y]], size=pointSize, brush=self._getCachedBrush(pointColor))
 
     def mouseClickEvent(self, ev):
         ''''mouseClickevent(self, ev)
         Event handler for when the mouse is pressed in a flika window.
         '''
-        self.EEEE = ev
         if self.x is not None and self.y is not None and ev.button() == QtCore.Qt.RightButton and not self.creatingROI:
             mm = g.settings['mousemode']
             if mm == 'point':

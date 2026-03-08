@@ -28,7 +28,7 @@ def _draw_blob_circles(image, blobs):
     marked : 2D ndarray
         Image with blob markers drawn.
     """
-    marked = image.copy().astype(np.float64)
+    marked = np.array(image, dtype=np.float64)
     mark_val = np.max(marked) * 1.2 if np.max(marked) != 0 else 1.0
     for y, x, sigma in blobs:
         r = int(np.ceil(sigma * np.sqrt(2)))
@@ -56,7 +56,7 @@ def _draw_peaks(image, coords):
     marked : 2D ndarray
         Image with peak markers drawn.
     """
-    marked = image.copy().astype(np.float64)
+    marked = np.array(image, dtype=np.float64)
     mark_val = np.max(marked) * 1.2 if np.max(marked) != 0 else 1.0
     for y, x in coords:
         y, x = int(round(y)), int(round(x))
