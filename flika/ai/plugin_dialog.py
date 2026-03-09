@@ -3,9 +3,6 @@ from __future__ import annotations
 
 import ast
 import os
-import sys
-import importlib
-import traceback
 from qtpy import QtWidgets, QtCore, QtGui
 from ..logger import logger
 
@@ -125,11 +122,6 @@ class PluginGeneratorDialog(QtWidgets.QDialog):
         self._generate_btn.clicked.connect(self._on_generate)
         gen_layout.addWidget(self._generate_btn)
 
-        self._auto_load = QtWidgets.QCheckBox("Load in current session")
-        self._auto_load.setChecked(True)
-        self._auto_load.setToolTip(
-            "Automatically load the plugin into flika after saving (no restart needed)")
-        gen_layout.addWidget(self._auto_load)
         layout.addLayout(gen_layout)
 
         # Preview pane
@@ -156,8 +148,9 @@ class PluginGeneratorDialog(QtWidgets.QDialog):
         # Action buttons
         btn_layout = QtWidgets.QHBoxLayout()
 
-        self._btn_save = QtWidgets.QPushButton("Save to Plugins")
-        self._btn_save.setToolTip("Save the plugin to ~/.FLIKA/plugins/ and optionally load it")
+        self._btn_save = QtWidgets.QPushButton("Save && Load Plugin")
+        self._btn_save.setToolTip(
+            "Save to ~/.FLIKA/plugins/ and reload all plugins so it appears in the menu")
         self._btn_save.clicked.connect(self._save_plugin)
         self._btn_save.setEnabled(False)
         btn_layout.addWidget(self._btn_save)
@@ -291,69 +284,41 @@ class PluginGeneratorDialog(QtWidgets.QDialog):
             gen = self._generator or PluginGenerator()
             path = gen.save_plugin(self._generated_code, name, description)
             self._saved_path = path
-            self._update_status(f"Plugin saved to {path}")
             self._btn_push.setEnabled(True)
-
-            # Auto-load if checked
-            if self._auto_load.isChecked():
-                self._load_plugin_live(name, path)
+            self._update_status("Plugin saved. Reloading plugins...")
+            self._reload_plugins(name)
         except Exception as e:
             self._update_status(f"Save failed: {e}")
             logger.error("Plugin save error: %s", e)
 
-    def _load_plugin_live(self, name, filepath):
-        """Dynamically load a saved plugin into the current session."""
-        try:
-            from ..app.plugin_manager import get_plugin_directory
-            from .. import global_vars as g
+    def _reload_plugins(self, name):
+        """Reload all plugins via the Plugin Manager's thread.
 
-            plugin_dir = get_plugin_directory()  # ensures sys.path is set up
+        The app's pluginMenu uses ``aboutToShow`` to rebuild itself from
+        ``PluginManager.plugins``, so we just need to update that dict
+        and bind the menus.
+        """
+        from ..app.plugin_manager import Load_Local_Plugins_Thread, PluginManager
 
-            # Import using the same path the plugin manager uses:
-            # plugins.<name>.<name>  (relative to ~/.FLIKA/ on sys.path)
-            full_module = f"plugins.{name}.{name}"
+        thread = Load_Local_Plugins_Thread()
 
-            # Remove stale entries so reimport works
-            for key in list(sys.modules.keys()):
-                if key.startswith(f"plugins.{name}"):
-                    del sys.modules[key]
+        def _on_done(plugins):
+            for p in plugins.values():
+                if p.loaded:
+                    p.bind_menu_and_methods()
+            PluginManager.plugins = plugins
 
-            mod = importlib.import_module(full_module)
-
-            # Find BaseProcess instances by checking for gui/start methods
-            # (more robust than isinstance which can fail across import paths)
-            loaded_any = False
-            for attr_name in dir(mod):
-                obj = getattr(mod, attr_name, None)
-                if (obj is not None and
-                        hasattr(obj, 'gui') and callable(obj.gui) and
-                        hasattr(obj, 'start') and
-                        not isinstance(obj, type)):
-                    # This looks like a BaseProcess instance
-                    if hasattr(g, 'm') and g.m is not None:
-                        display_name = name.replace("_", " ").title()
-                        action = QtWidgets.QAction(
-                            display_name, g.m,
-                            triggered=obj.gui)
-                        g.m.pluginMenu.addAction(action)
-                        loaded_any = True
-                        logger.info(
-                            "Loaded AI plugin '%s' into Plugins menu",
-                            display_name)
-
-            if loaded_any:
-                self._update_status(
-                    f"Plugin '{name}' saved and loaded! Check the Plugins menu.")
-            else:
-                self._update_status(
-                    f"Plugin saved to {os.path.dirname(filepath)}. "
-                    "No BaseProcess instance found to auto-load.")
-
-        except Exception as e:
-            logger.error("Failed to auto-load plugin: %s", e)
+            display_name = name.replace("_", " ").title()
             self._update_status(
-                f"Plugin saved but auto-load failed: {e}. "
-                "Restart flika to load the plugin.")
+                f"Plugin '{display_name}' saved and loaded! "
+                "Check the Plugins menu.")
+            logger.info("Plugins reloaded after saving AI plugin '%s'", name)
+
+        thread.plugins_done_sig.connect(_on_done)
+        thread.error_loading.connect(
+            lambda msg: self._update_status(f"Plugin reload error: {msg}"))
+        thread.start()
+        self._reload_thread = thread  # prevent GC
 
     def _open_in_editor(self):
         if not self._generated_code:
