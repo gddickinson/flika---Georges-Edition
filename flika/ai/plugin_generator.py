@@ -75,16 +75,12 @@ def _validate_plugin_structure(code: str) -> list[str]:
         call_node = methods['__call__']
         call_src = ast.get_source_segment(code, call_node)
         if call_src:
-            # Check for BaseProcess patterns (not needed for noPriorWindow)
-            is_no_prior = any(
-                'BaseProcess_noPriorWindow' in ast.get_source_segment(code, n)
-                for n in tree.body
-                if isinstance(n, (ast.Import, ast.ImportFrom))
-                and ast.get_source_segment(code, n)
-            )
-            if not is_no_prior:
-                if 'self.start(' not in call_src:
-                    warnings.append("__call__() missing self.start() call")
+            # self.start() is ALWAYS required — even for noPriorWindow
+            # (it sets self.command which self.end() needs)
+            if 'self.start(' not in call_src and 'self.start()' not in call_src:
+                warnings.append(
+                    "__call__() missing self.start() — causes "
+                    "AttributeError: 'command' when end() is called")
             if 'self.end()' not in call_src:
                 warnings.append("__call__() missing self.end() call")
             if 'return' not in call_src or 'self.end()' not in call_src:
@@ -150,6 +146,9 @@ A flika plugin is a Python module containing a subclass of
 
 # For plugins that don't need an existing window:
     from flika.utils.BaseProcess import BaseProcess_noPriorWindow
+    # IMPORTANT: noPriorWindow plugins MUST still call self.start() (no args)
+    # in __call__() before self.end().  start() sets self.command which
+    # end() requires.  Without it you get: AttributeError: 'command'
 
 # Key flika APIs available to plugins:
 ## Global state
@@ -260,15 +259,16 @@ class PluginGenerator:
         except SyntaxError as e:
             raise ValueError(f"Generated code has syntax errors: {e}") from e
 
-        # Validate plugin structure
+        # Validate plugin structure and attempt auto-fixes
         structure_warnings = _validate_plugin_structure(code)
         if structure_warnings:
             logger.warning("Plugin structure warnings: %s", structure_warnings)
-            # Attempt auto-fix for missing module-level instance
             if any("No module-level instance" in w for w in structure_warnings):
                 code = self._fix_missing_instance(code)
-                # Re-validate
-                structure_warnings = _validate_plugin_structure(code)
+            if any("missing self.start()" in w for w in structure_warnings):
+                code = self._fix_missing_start(code)
+            # Re-validate after fixes
+            structure_warnings = _validate_plugin_structure(code)
 
         self._structure_warnings = structure_warnings
         return code
@@ -288,6 +288,40 @@ class PluginGenerator:
                     logger.info("Auto-added module-level instance: %s = %s()",
                                 instance_name, class_name)
                     return code
+        except Exception:
+            pass
+        return code
+
+    def _fix_missing_start(self, code: str) -> str:
+        """Insert self.start() at the beginning of __call__."""
+        try:
+            tree = ast.parse(code)
+            for node in tree.body:
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name == '__call__':
+                        # Determine if this is noPriorWindow
+                        is_no_prior = 'BaseProcess_noPriorWindow' in code
+                        # Find the line of the first statement in __call__
+                        if item.body:
+                            first_line = item.body[0].lineno
+                            lines = code.split('\n')
+                            # Detect indentation from first statement
+                            indent = ''
+                            for ch in lines[first_line - 1]:
+                                if ch in ' \t':
+                                    indent += ch
+                                else:
+                                    break
+                            if is_no_prior:
+                                start_line = f"{indent}self.start()"
+                            else:
+                                start_line = f"{indent}self.start(keepSourceWindow)"
+                            lines.insert(first_line - 1, start_line)
+                            code = '\n'.join(lines)
+                            logger.info("Auto-inserted self.start() into __call__()")
+                            return code
         except Exception:
             pass
         return code
