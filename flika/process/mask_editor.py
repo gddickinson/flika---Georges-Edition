@@ -4,6 +4,8 @@
 Provides a dockable control panel and mouse/keyboard-driven drawing and
 erasing on a mask window.
 """
+from ..logger import logger
+logger.debug("Started 'reading process/mask_editor.py'")
 import numpy as np
 from skimage.draw import disk, line
 from qtpy import QtWidgets, QtCore, QtGui
@@ -436,3 +438,4 @@ class Mask_Editor(BaseProcess_noPriorWindow):
 
 
 mask_editor = Mask_Editor()
+logger.debug("Completed 'reading process/mask_editor.py'")

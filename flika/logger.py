@@ -43,14 +43,23 @@ def get_log_file():
 
 LOG_FILE = get_log_file()
 FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
-basicConfig(filename=LOG_FILE, format=FORMAT)
+formatter = Formatter(FORMAT)
+
 logger = getLogger("flika")
 logger.setLevel(LEVEL)
-handler = StreamHandler()
-handler.setLevel(LEVEL)
-formatter = Formatter(FORMAT)
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+logger.propagate = False  # Don't rely on root logger
+
+# File handler — write to log file
+file_handler = FileHandler(LOG_FILE)
+file_handler.setLevel(LEVEL)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# Console handler — write to stderr
+console_handler = StreamHandler()
+console_handler.setLevel(LEVEL)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):

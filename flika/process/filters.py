@@ -1,8 +1,9 @@
+from ..logger import logger
+logger.debug("Started 'reading process/filters.py'")
 import numpy as np
 import skimage
 import skimage.filters
 from qtpy import QtWidgets, QtGui, QtCore
-from ..logger import logger
 from .. import global_vars as g
 from ..utils.BaseProcess import BaseProcess, SliderLabel, SliderLabelOdd, CheckBox
 from .progress_bar import ProgressBar
@@ -2095,4 +2096,5 @@ class Bleach_Correction(BaseProcess):
 
 
 bleach_correction = Bleach_Correction()
+logger.debug("Completed 'reading process/filters.py'")
 

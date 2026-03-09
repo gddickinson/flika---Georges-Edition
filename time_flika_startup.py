@@ -1,5 +1,6 @@
 import os
 import datetime
+import logging
 from logging import DEBUG
 
 def get_log_file():
@@ -15,6 +16,14 @@ def get_log_file():
     log_idx -= 1
     LOG_FILE = os.path.join(LOG_DIR, '{0:0>3}.log'.format(log_idx))
     return LOG_FILE
+
+def flush_all_handlers():
+    """Flush all logging handlers to ensure log file is complete."""
+    for handler in logging.root.handlers:
+        handler.flush()
+    flika_logger = logging.getLogger("flika")
+    for handler in flika_logger.handlers:
+        handler.flush()
 
 def get_log_steps():
     LOG_FILE = get_log_file()
@@ -48,28 +57,36 @@ def get_steps(lines, idx, parent_step=None):
     while idx < len(lines):
         line = lines[idx]
         step_name = line.split("'")[1]
-        if line.split(' - DEBUG - ')[1][:7] == 'Started':
+        msg = line.split(' - DEBUG - ')[1]
+        if msg.startswith('Started'):
             t_i = datetime.datetime.strptime(line.split(' - DEBUG')[0], "%Y-%m-%d %H:%M:%S,%f")
-            substeps, t_f, idx = get_steps(lines, idx+1, parent_step=step_name)
-            steps.append(Step(step_name, t_f - t_i, substeps))
-        if line.split(' - DEBUG - ')[1][:9] == 'Completed':
-            try:
-                assert step_name == parent_step
-            except AssertionError:
-                print(AssertionError)
-                print("Step name: '{}', parent_step: '{}'".format(step_name, parent_step))
+            result = get_steps(lines, idx+1, parent_step=step_name)
+            if isinstance(result, tuple) and len(result) == 3:
+                substeps, t_f, idx = result
+                steps.append(Step(step_name, t_f - t_i, substeps))
+                continue  # idx already points to next line
+            else:
+                # Missing Completed entry — use last known time
+                substeps = result if isinstance(result, list) else []
+                t_last = datetime.datetime.strptime(lines[-1].split(' - DEBUG')[0], "%Y-%m-%d %H:%M:%S,%f")
+                steps.append(Step(step_name + ' [incomplete]', t_last - t_i, substeps))
+                break
+        elif msg.startswith('Completed'):
+            if step_name != parent_step:
+                print("Warning: Step name '{}' != parent_step '{}'".format(step_name, parent_step))
             t_f = datetime.datetime.strptime(line.split(' - DEBUG')[0], "%Y-%m-%d %H:%M:%S,%f")
             return steps, t_f, idx+1
+        idx += 1
     return steps
 
 if __name__ == '__main__':
+    import sys
+    real_stdout = sys.__stdout__  # preserve original stdout before flika wraps it
     from flika import *
     start_flika()
     assert logger.level == DEBUG
+    flush_all_handlers()
     steps = get_log_steps()
     for step in steps:
-        print(step.repr_w_children())
-
-
-
-
+        real_stdout.write(step.repr_w_children())
+    real_stdout.flush()

@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from ..logger import logger
+logger.debug("Started 'reading process/binary.py'")
 import numpy as np
 import scipy
 import scipy.ndimage
@@ -1266,10 +1268,7 @@ class Multi_Otsu_Threshold(BaseProcess):
         return self.end()
 
 multi_otsu_threshold = Multi_Otsu_Threshold()
-
-
-
-
+logger.debug("Completed 'reading process/binary.py'")
 
 
 
