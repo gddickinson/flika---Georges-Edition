@@ -11,6 +11,7 @@ _STANDALONE_MODULES = {
     'test_spt_io_extended',
     'test_dynamics',
     'test_ai',
+    'test_benchmarks',
 }
 
 _flikaApp = None

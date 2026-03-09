@@ -111,6 +111,7 @@ class SimulationEngine:
         """
         cfg = self.config
         gt = {}  # ground truth
+        self._extra_gt = {}  # populated by sub-methods
 
         def _progress(pct, msg):
             if progress_callback:
@@ -145,6 +146,36 @@ class SimulationEngine:
         if positions is not None:
             gt['positions'] = positions
 
+        # Enhanced GT: per-frame detection table and track dict
+        if positions is not None:
+            from .ground_truth import (positions_to_detection_table,
+                                       trajectories_to_track_dict)
+            gt['positions_per_frame'] = positions_to_detection_table(
+                positions, trajectories, cfg)
+            if trajectories is not None:
+                gt['track_dict'] = trajectories_to_track_dict(
+                    positions, trajectories, cfg)
+                # Store true diffusion coefficient if available
+                D = cfg.motion_params.get('D')
+                if D is not None:
+                    gt['diffusion_coefficients'] = np.full(
+                        len(positions), D)
+
+        # Enhanced GT: segmentation labels for cell fields
+        if cfg.structure_type == 'cell_field':
+            from . import structures as S2
+            sp = cfg.structure_params
+            label_shape = (cfg.nz, cfg.ny, cfg.nx) if is_3d \
+                else (cfg.ny, cfg.nx)
+            gt['segmentation_mask'] = S2.generate_cell_field(
+                label_shape,
+                n_cells=sp.get('n_cells', 20),
+                cell_type=sp.get('cell_type', 'round'),
+                labels=True)
+
+        # Binary mask for any structure
+        gt['binary_mask'] = (structure > 0).astype(np.uint8)
+
         # Generate time series
         stack = self._render_stack(structure, positions, trajectories,
                                    psf, fluor, _progress)
@@ -156,6 +187,7 @@ class SimulationEngine:
             stack = apply_background(stack, bg_level)
 
         gt['n_photons'] = stack.copy()
+        gt.update(self._extra_gt)
         stack = apply_camera(stack.astype(float), cfg.camera)
 
         # Reshape to match flika's dimension conventions:
@@ -364,6 +396,17 @@ class SimulationEngine:
                 rate=cfg.modality_params.get('calcium_rate', 0.5),
                 tau_decay=cfg.modality_params.get('calcium_tau', 0.5),
                 dt=cfg.dt)
+            self._extra_gt['calcium_trace'] = calcium_trace.copy()
+            # Find spike frames (local maxima above baseline)
+            baseline = np.median(calcium_trace)
+            threshold = baseline + 2 * np.std(calcium_trace[:max(10, cfg.nt // 10)])
+            peaks = []
+            for i in range(1, len(calcium_trace) - 1):
+                if (calcium_trace[i] > threshold and
+                        calcium_trace[i] > calcium_trace[i - 1] and
+                        calcium_trace[i] >= calcium_trace[i + 1]):
+                    peaks.append(i)
+            self._extra_gt['calcium_spike_frames'] = np.array(peaks)
 
         for t in range(cfg.nt):
             pct = 40 + int(45 * t / max(cfg.nt, 1))
@@ -521,6 +564,8 @@ class SimulationEngine:
             # Further sparsify
             sparse_mask = np.random.random(states.shape) < target_on_fraction
             states = states & sparse_mask
+
+        self._extra_gt['emitter_states'] = states
 
         stack = np.zeros((cfg.nt, cfg.ny, cfg.nx))
         psf_2d = psf if psf.ndim == 2 else psf[psf.shape[0] // 2]

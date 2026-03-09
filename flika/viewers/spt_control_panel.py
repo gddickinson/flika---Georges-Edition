@@ -66,6 +66,94 @@ def _make_hline():
     return line
 
 
+def _render_histogram(x, y, out_w, out_h, scale):
+    """Render localizations as a 2D histogram (binned super-resolution)."""
+    hist, _, _ = np.histogram2d(
+        y * scale, x * scale,
+        bins=[int(out_h), int(out_w)],
+        range=[[0, int(out_h)], [0, int(out_w)]],
+    )
+    return hist
+
+
+def _render_ash(x, y, out_w, out_h, scale, n_shifts=4):
+    """Average Shifted Histogram rendering.
+
+    Averages multiple histograms shifted by sub-pixel offsets for smoother
+    output than a plain histogram without the cost of Gaussian rendering.
+    """
+    from scipy.ndimage import shift as ndi_shift
+    oh, ow = int(out_h), int(out_w)
+    accum = np.zeros((oh, ow), dtype=np.float64)
+    for dy in range(n_shifts):
+        for dx in range(n_shifts):
+            off_y = dy / n_shifts
+            off_x = dx / n_shifts
+            hist, _, _ = np.histogram2d(
+                y * scale + off_y, x * scale + off_x,
+                bins=[oh, ow],
+                range=[[0, oh], [0, ow]],
+            )
+            accum += ndi_shift(hist, [-off_y, -off_x], order=1, mode='constant')
+    accum /= n_shifts * n_shifts
+    return accum
+
+
+def _render_gaussian(x, y, out_w, out_h, scale, psf_sigma, sigma=None):
+    """Render localizations by stamping Gaussian spots.
+
+    Parameters
+    ----------
+    x, y : array-like
+        Localization coordinates in original pixel units.
+    out_w, out_h : int
+        Output image dimensions (pixels).
+    scale : int
+        Up-sampling factor.
+    psf_sigma : float
+        Default PSF sigma in original pixels (used when per-loc sigma is None).
+    sigma : array-like or None
+        Per-localization uncertainty (original pixel units).
+    """
+    oh, ow = int(out_h), int(out_w)
+    img = np.zeros((oh, ow), dtype=np.float64)
+
+    sx = x * scale
+    sy = y * scale
+
+    default_s = psf_sigma * scale
+    if sigma is not None:
+        per_s = np.asarray(sigma) * scale
+    else:
+        per_s = np.full(len(x), default_s)
+
+    # Clamp minimum sigma to avoid degenerate Gaussians
+    per_s = np.clip(per_s, 0.5, None)
+
+    radius_factor = 3  # stamp ±3σ
+    for i in range(len(sx)):
+        cx, cy, s = sx[i], sy[i], per_s[i]
+        r = int(np.ceil(s * radius_factor))
+        x0 = int(np.floor(cx)) - r
+        x1 = int(np.floor(cx)) + r + 1
+        y0 = int(np.floor(cy)) - r
+        y1 = int(np.floor(cy)) + r + 1
+
+        # Clip to image bounds
+        sx0 = max(0, x0)
+        sy0 = max(0, y0)
+        sx1 = min(ow, x1)
+        sy1 = min(oh, y1)
+        if sx0 >= sx1 or sy0 >= sy1:
+            continue
+
+        yy, xx = np.mgrid[sy0:sy1, sx0:sx1]
+        g = np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * s * s))
+        img[sy0:sy1, sx0:sx1] += g
+
+    return img
+
+
 def _get_spt_data(win):
     """Safely return the ``window.metadata['spt']`` dict, creating if needed."""
     if win is None:
@@ -133,10 +221,25 @@ class SPTControlPanel(QtWidgets.QDockWidget):
         )
         self.setMinimumWidth(340)
 
+        self._viz_windows = []  # prevent GC of parentless plot windows
+
         self._build_ui()
         self._connect_signals()
 
         logger.debug("SPTControlPanel created")
+
+    def _keep_window(self, win):
+        """Hold a reference to a parentless window to prevent GC."""
+        # Prune already-closed/deleted windows
+        alive = []
+        for w in self._viz_windows:
+            try:
+                if w.isVisible():
+                    alive.append(w)
+            except RuntimeError:
+                pass  # C++ object already deleted
+        self._viz_windows = alive
+        self._viz_windows.append(win)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -224,6 +327,39 @@ class SPTControlPanel(QtWidgets.QDockWidget):
             "Open the SPT Results spreadsheet (sortable, filterable, "
             "exportable)")
         layout.addWidget(self.det_results_table_btn)
+
+        # Render Image button
+        self.det_render_btn = QtWidgets.QPushButton("Render Image")
+        self.det_render_btn.setToolTip(
+            "Generate a super-resolution image from detected localizations")
+        self.det_render_btn.setEnabled(False)
+        layout.addWidget(self.det_render_btn)
+
+        # Rendering controls (visible for all methods)
+        render_row = QtWidgets.QHBoxLayout()
+        render_row.addWidget(QtWidgets.QLabel("Method:"))
+        self.render_combo = QtWidgets.QComboBox()
+        self.render_combo.addItems([
+            'Gaussian', 'Histogram', 'Average Shifted Histogram'])
+        self.render_combo.setToolTip(
+            "Gaussian: each localization drawn as a Gaussian with its "
+            "uncertainty.\nHistogram: simple 2D histogram of positions.\n"
+            "ASH: averaged shifted histogram for smoother output.")
+        render_row.addWidget(self.render_combo)
+        render_row.addWidget(QtWidgets.QLabel("Scale:"))
+        self.render_scale = QtWidgets.QSpinBox()
+        self.render_scale.setRange(2, 50)
+        self.render_scale.setValue(10)
+        self.render_scale.setToolTip(
+            "Magnification factor relative to raw image pixels")
+        render_row.addWidget(self.render_scale)
+        render_row.addWidget(QtWidgets.QLabel("Pixel:"))
+        self.render_pixel_size = _make_double_spin(
+            108.0, 1.0, 10000.0, decimals=1, step=1.0, suffix=' nm')
+        self.render_pixel_size.setToolTip(
+            "Camera pixel size in nanometers (used for scale bar / metadata)")
+        render_row.addWidget(self.render_pixel_size)
+        layout.addLayout(render_row)
 
         # Progress bar
         self.det_progress = QtWidgets.QProgressBar()
@@ -606,6 +742,7 @@ class SPTControlPanel(QtWidgets.QDockWidget):
             self._on_det_method_changed)
         self.det_show_particles_btn.toggled.connect(self._on_toggle_particles)
         self.det_results_table_btn.clicked.connect(self._on_show_results_table)
+        self.det_render_btn.clicked.connect(self._on_render_image)
         self.utrack_det_controls.auto_psf_btn.clicked.connect(
             self._on_auto_estimate_psf)
         self.utrack_det_controls.auto_noise_btn.clicked.connect(
@@ -771,7 +908,17 @@ class SPTControlPanel(QtWidgets.QDockWidget):
             elif method == 'ThunderSTORM':
                 from ..spt.detection.thunderstorm import ThunderSTORMDetector
                 ts_params = self.ts_controls.get_params()
-                detector = ThunderSTORMDetector(**ts_params)
+                # Filter to only pass valid constructor keys
+                _ts_init_keys = {'filter_type', 'detector_type',
+                                 'fitter_type', 'threshold', 'roi_size',
+                                 'camera_params', 'filter_params',
+                                 'detector_params', 'fitter_params',
+                                 'convert_to_nm'}
+                _ts_extra = {k: v for k, v in ts_params.items()
+                             if k not in _ts_init_keys}
+                ts_init = {k: v for k, v in ts_params.items()
+                           if k in _ts_init_keys}
+                detector = ThunderSTORMDetector(**ts_init)
 
                 # detect_stack returns (M, 8): [frame, x, y, intensity,
                 #   sigma_x, sigma_y, background, uncertainty]
@@ -856,6 +1003,9 @@ class SPTControlPanel(QtWidgets.QDockWidget):
             self.sigDetectionFinished.emit(n_total)
             logger.info("Detection complete: %d localizations (%s)",
                         n_total, method)
+
+            # Enable rendering
+            self.det_render_btn.setEnabled(n_total > 0)
 
             # Auto-show particles and update results table
             if n_total > 0:
@@ -1003,6 +1153,68 @@ class SPTControlPanel(QtWidgets.QDockWidget):
         pdata = spt.get('particle_data')
         if pdata is not None:
             table.set_particle_data(pdata)
+
+    def _on_render_image(self):
+        """Generate a super-resolution image from detected localizations."""
+        from .. import global_vars as g
+        win = self._current_window()
+        spt = _get_spt_data(win) if win else None
+        if spt is None:
+            self.det_result_label.setText("No window selected.")
+            return
+
+        locs = spt.get('localizations')
+        if locs is None or len(locs) == 0:
+            self.det_result_label.setText("No localizations to render.")
+            return
+
+        # Localization coords: [:,1]=x, [:,2]=y
+        x = locs[:, 1].astype(float)
+        y = locs[:, 2].astype(float)
+
+        # Get rendering parameters from UI
+        method = self.render_combo.currentText()
+        scale = self.render_scale.value()
+
+        # Get uncertainty if available (ThunderSTORM col 7)
+        sigma = None
+        if locs.shape[1] >= 5:
+            # Use sigma_x if available, otherwise estimate from PSF
+            sigma = locs[:, 4].astype(float) if locs.shape[1] >= 5 else None
+
+        # Determine output image size
+        raw_h, raw_w = win.mx, win.my  # flika dims
+        out_h = raw_h * scale
+        out_w = raw_w * scale
+
+        import numpy as np
+
+        try:
+            if method == 'Histogram':
+                rendered = _render_histogram(x, y, out_w, out_h, scale)
+            elif method == 'Average Shifted Histogram':
+                rendered = _render_ash(x, y, out_w, out_h, scale)
+            else:  # Gaussian
+                psf_sigma = self.det_psf_sigma.value()
+                rendered = _render_gaussian(x, y, out_w, out_h, scale,
+                                           psf_sigma, sigma)
+
+            from ..window import Window
+            name = f"{win.name} - SR Render ({method}, {scale}x)"
+            sr_win = Window(rendered.astype(np.float32), name=name)
+            pixel_nm = self.render_pixel_size.value()
+            sr_win.metadata['pixel_size_nm'] = pixel_nm / scale
+            sr_win.metadata['render'] = {
+                'method': method, 'scale': scale,
+                'camera_pixel_nm': pixel_nm,
+                'n_localizations': len(x),
+            }
+            self.det_result_label.setText(
+                f"Rendered {len(x)} localizations → "
+                f"{out_h}x{out_w} image ({scale}x).")
+        except Exception as exc:
+            logger.error("Rendering failed: %s", exc, exc_info=True)
+            self.det_result_label.setText(f"Rendering failed: {exc}")
 
     # ------------------------------------------------------------------
     # Tab 2 callbacks -- Linking
@@ -1782,10 +1994,11 @@ class SPTControlPanel(QtWidgets.QDockWidget):
         try:
             from .track_window import TrackDetailWindow
             detail_win = TrackDetailWindow(
-                source_window=win, parent=g.m)
+                source_window=win, parent=None)
             detail_win.set_data(
                 spt['localizations'], spt['tracks'],
                 features_dict=spt.get('features_by_track'))
+            self._keep_window(detail_win)
             detail_win.show()
             logger.info("Track detail window opened")
         except ImportError:
@@ -1816,7 +2029,7 @@ class SPTControlPanel(QtWidgets.QDockWidget):
 
         try:
             from .all_tracks_plot import AllTracksPlotWindow
-            plot_win = AllTracksPlotWindow(parent=g.m)
+            plot_win = AllTracksPlotWindow(parent=None)
 
             # Build tracks_dict if not present
             tracks_dict = spt.get('tracks_dict')
@@ -1827,6 +2040,7 @@ class SPTControlPanel(QtWidgets.QDockWidget):
                 spt['tracks_dict'] = tracks_dict
 
             plot_win.set_data(win, tracks_dict)
+            self._keep_window(plot_win)
             plot_win.show()
             logger.info("All tracks plot window opened")
         except ImportError:
@@ -1857,7 +2071,7 @@ class SPTControlPanel(QtWidgets.QDockWidget):
 
         try:
             from .diffusion_plot import DiffusionAnalysisWindow
-            diff_win = DiffusionAnalysisWindow(parent=g.m)
+            diff_win = DiffusionAnalysisWindow(parent=None)
 
             # Build tracks_dict if not present
             tracks_dict = spt.get('tracks_dict')
@@ -1871,6 +2085,7 @@ class SPTControlPanel(QtWidgets.QDockWidget):
                 tracks_dict,
                 pixel_size=self.ana_pixel_size.value(),
                 frame_interval=self.ana_frame_interval.value())
+            self._keep_window(diff_win)
             diff_win.show()
             logger.info("Diffusion analysis window opened")
         except ImportError:
@@ -1901,7 +2116,7 @@ class SPTControlPanel(QtWidgets.QDockWidget):
 
         try:
             from .flower_plot import FlowerPlotWindow
-            flower_win = FlowerPlotWindow(parent=g.m)
+            flower_win = FlowerPlotWindow(parent=None)
 
             # Build tracks_dict if not present
             tracks_dict = spt.get('tracks_dict')
@@ -1915,6 +2130,7 @@ class SPTControlPanel(QtWidgets.QDockWidget):
                 tracks_dict,
                 classification=spt.get('classification'),
                 features=spt.get('features_by_track'))
+            self._keep_window(flower_win)
             flower_win.show()
             logger.info("Flower plot window opened")
         except ImportError:
@@ -1946,7 +2162,9 @@ class SPTControlPanel(QtWidgets.QDockWidget):
         try:
             import pandas as pd
             from .chart_dock import ChartDock
-            chart = ChartDock(parent=g.m)
+            chart = ChartDock(parent=None)
+            chart.setFloating(True)
+            chart.resize(800, 600)
 
             # Build DataFrame from features_by_track
             features = spt['features_by_track']
@@ -1960,6 +2178,7 @@ class SPTControlPanel(QtWidgets.QDockWidget):
                     lambda tid: classification.get(tid, -1))
 
             chart.set_data(df)
+            self._keep_window(chart)
             chart.show()
             logger.info("Chart dock opened")
         except ImportError:

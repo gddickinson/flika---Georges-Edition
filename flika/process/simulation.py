@@ -59,5 +59,14 @@ class Simulate(BaseProcess_noPriorWindow):
         w.metadata['simulation'] = metadata
         return w
 
+    def run_benchmarks_gui(self):
+        """Open the Benchmark Runner dialog."""
+        from ..simulation.benchmark_dialog import BenchmarkDialog
+        dlg = BenchmarkDialog(parent=g.m)
+        dlg.show()
+        if hasattr(g, 'dialogs'):
+            g.dialogs.append(dlg)
+        return dlg
+
 
 simulate = Simulate()

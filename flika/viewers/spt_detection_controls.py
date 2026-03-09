@@ -466,31 +466,6 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
 
         layout.addWidget(sec_post)
 
-        # ==================================================================
-        # Rendering (collapsible)
-        # ==================================================================
-        sec_render = _CollapsibleSection("Super-resolution Rendering")
-
-        self.render_method = QtWidgets.QComboBox()
-        self.render_method.addItems([
-            'gaussian', 'normalized_gaussian', 'histogram',
-            'ash', 'scatter'])
-        self.render_method.setToolTip("Super-resolution image rendering mode")
-        sec_render.addRow("Method:", self.render_method)
-
-        self.render_pixel_size = _make_double_spin(
-            10.0, 0.1, 1000.0, decimals=1, step=1.0, suffix=' nm')
-        self.render_pixel_size.setToolTip(
-            "Output pixel size for super-resolution image")
-        sec_render.addRow("Pixel size:", self.render_pixel_size)
-
-        self.render_magnification = _make_int_spin(10, 1, 100)
-        self.render_magnification.setToolTip(
-            "Sub-pixel shifts per axis for ASH rendering")
-        sec_render.addRow("ASH magnification:", self.render_magnification)
-
-        layout.addWidget(sec_render)
-
         # Apply initial visibility for filter/detector/fitter-specific rows
         self._on_filter_changed(self.filter_type.currentText())
         self._on_detector_changed(self.detector_type.currentText())
@@ -722,13 +697,6 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
                 'max_distance': self.duplicate_max_distance.value(),
             }
 
-        # Rendering params
-        result['rendering'] = {
-            'method': self.render_method.currentText(),
-            'pixel_size': self.render_pixel_size.value(),
-            'magnification': self.render_magnification.value(),
-        }
-
         return result
 
     def set_params(self, params):
@@ -890,17 +858,6 @@ class ThunderSTORMControlGroup(QtWidgets.QGroupBox):
             if 'max_distance' in rd:
                 self.duplicate_max_distance.setValue(rd['max_distance'])
 
-        # Rendering
-        if 'rendering' in params:
-            rp = params['rendering']
-            if 'method' in rp:
-                idx = self.render_method.findText(rp['method'])
-                if idx >= 0:
-                    self.render_method.setCurrentIndex(idx)
-            if 'pixel_size' in rp:
-                self.render_pixel_size.setValue(rp['pixel_size'])
-            if 'magnification' in rp:
-                self.render_magnification.setValue(rp['magnification'])
 
 
 # ---------------------------------------------------------------------------

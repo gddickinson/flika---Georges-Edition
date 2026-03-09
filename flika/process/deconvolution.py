@@ -40,7 +40,18 @@ def _airy_psf(size, radius):
 
 @per_plane
 def _richardson_lucy_impl(image, psf, iterations):
-    """Richardson-Lucy deconvolution for a single 2D frame."""
+    """Richardson-Lucy deconvolution (2D or 3D stack)."""
+    if image.ndim == 2:
+        return _rl_2d(image, psf, iterations)
+    # 3D: apply per-frame
+    out = np.empty_like(image)
+    for t in range(image.shape[0]):
+        out[t] = _rl_2d(image[t], psf, iterations)
+    return out
+
+
+def _rl_2d(image, psf, iterations):
+    """Richardson-Lucy on a single 2D plane."""
     from scipy.signal import fftconvolve
     psf_mirror = psf[::-1, ::-1]
     estimate = np.full_like(image, image.mean(), dtype=np.float64)
@@ -55,9 +66,18 @@ def _richardson_lucy_impl(image, psf, iterations):
 
 @per_plane
 def _wiener_impl(image, psf, noise_var):
-    """Wiener deconvolution for a single 2D frame."""
+    """Wiener deconvolution (2D or 3D stack)."""
+    if image.ndim == 2:
+        return _wiener_2d(image, psf, noise_var)
+    out = np.empty_like(image)
+    for t in range(image.shape[0]):
+        out[t] = _wiener_2d(image[t], psf, noise_var)
+    return out
+
+
+def _wiener_2d(image, psf, noise_var):
+    """Wiener deconvolution on a single 2D plane."""
     img_fft = np.fft.fft2(image)
-    # Zero-pad PSF to image size
     psf_padded = np.zeros_like(image)
     py, px = psf.shape
     iy, ix = image.shape

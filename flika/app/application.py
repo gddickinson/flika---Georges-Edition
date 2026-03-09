@@ -239,7 +239,7 @@ class FlikaApplication(QtWidgets.QMainWindow):
         #self.setFixedSize(326, 80)
         #self.setMaximumSize(width_px*3, 120)
         self.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Minimum);
-        self.setMinimumWidth(540)
+        self.setMinimumWidth(640)
         self.move(0, 0)
 
     def _make_menu(self):
@@ -330,11 +330,11 @@ class FlikaApplication(QtWidgets.QMainWindow):
         viewMenu = self.menuBar().addMenu('View')
         viewMenu.addAction('Orthogonal Views', lambda: g.win and g.win.toggleOrthogonalViews())
         viewMenu.addAction('3D Volume Viewer', lambda: g.win and g.win.toggleVolumeViewer())
+        viewMenu.addSeparator()
         viewMenu.addAction('ROI Manager', self._toggle_roi_manager)
+        viewMenu.addAction('Overlay Manager', self._show_overlay_manager)
         viewMenu.addAction('Metadata Editor', self._show_metadata_editor)
         viewMenu.addAction('Figure Composer', self._show_figure_composer)
-        viewMenu.addAction('Overlay Manager', self._show_overlay_manager)
-        viewMenu.addAction('Counting Tool', self._show_counting_tool)
 
         for menu in g.menus:
             self.menuBar().addMenu(menu)
@@ -349,8 +349,9 @@ class FlikaApplication(QtWidgets.QMainWindow):
         cameraMenu.addAction("Live Camera", self._show_camera)
 
         aiMenu = self.menuBar().addMenu('AI')
-        aiMenu.addAction("Generate Script", self._ai_generate_script)
-        aiMenu.addAction("Generate Plugin", self._ai_generate_plugin)
+        claudeMenu = aiMenu.addMenu("Claude")
+        claudeMenu.addAction("Generate Script", self._ai_generate_script)
+        claudeMenu.addAction("Generate Plugin", self._ai_generate_plugin)
         aiMenu.addAction("AI Denoiser", self._ai_denoise)
         aiMenu.addAction("Pixel Classifier", self._ai_classify)
         aiMenu.addAction("Particle Localizer", self._ai_localize)

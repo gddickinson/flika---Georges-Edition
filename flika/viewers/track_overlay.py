@@ -348,7 +348,10 @@ class TrackOverlay(QObject):
         This clears all previous overlay items and creates new ones for each
         track that falls within the current tail window.
         """
-        view = self.window.imageview.view
+        iv = getattr(self.window, 'imageview', None)
+        if iv is None:
+            return
+        view = iv.view
 
         # Remove old items
         for item in self._plot_items:
@@ -455,7 +458,12 @@ class TrackOverlay(QObject):
 
     def cleanup(self):
         """Remove all overlay items and disconnect signals."""
-        view = self.window.imageview.view
+        iv = getattr(self.window, 'imageview', None)
+        if iv is None:
+            self._plot_items.clear()
+            self._point_items.clear()
+            return
+        view = iv.view
         for item in self._plot_items:
             try:
                 view.removeItem(item)

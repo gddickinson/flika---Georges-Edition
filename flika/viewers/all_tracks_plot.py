@@ -574,7 +574,7 @@ class AllTracksPlotWindow(QtWidgets.QWidget):
             interactive=False,
             width=15,
         )
-        bar.setImageItem(img_item, insert_in=self.plot_heatmap)
+        bar.setImageItem(img_item, insert_in=self.plot_heatmap.getPlotItem())
 
     # ------------------------------------------------------------------
     # Slots
