@@ -41,6 +41,9 @@ class Detect_Particles(BaseProcess):
     Detect particles in the current window using statistical methods.
     Results stored in window.metadata['spt']['localizations'].
 
+    Note: For simple 2D blob or peak detection without tracking, see the
+    basic detectors under Process > Detection (LoG, DoH, Peak Local Max).
+
     Parameters
     ----------
     method : str

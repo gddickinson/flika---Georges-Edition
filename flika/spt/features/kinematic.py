@@ -9,6 +9,7 @@ Exact replica of the algorithms from:
 import numpy as np
 import math
 from ...logger import logger
+from ...utils.msd import msd_single_track, fit_msd_linear, fit_msd_anomalous
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +192,8 @@ def add_track_intensity_stats(df):
 def msd_analysis(positions, max_lag=None, min_points=5):
     """Mean Squared Displacement analysis.
 
+    Delegates to :mod:`flika.utils.msd` for the core computation.
+
     Args:
         positions: (N, 2) array of positions
         max_lag: maximum lag in frames (default: N//4)
@@ -207,37 +210,15 @@ def msd_analysis(positions, max_lag=None, min_points=5):
     if n < min_points:
         return {'msd_curve': np.array([]), 'diffusion_coefficient': 0.0, 'anomalous_exponent': 1.0}
 
-    if max_lag is None:
-        max_lag = max(n // 4, 2)
-    max_lag = min(max_lag, n - 1)
+    lags, msd_values, _counts = msd_single_track(positions, max_lag=max_lag)
 
-    lags = np.arange(1, max_lag + 1)
-    msd_values = np.zeros(len(lags))
-
-    for i, lag in enumerate(lags):
-        displacements = positions[lag:] - positions[:-lag]
-        sq_displacements = np.sum(displacements ** 2, axis=1)
-        msd_values[i] = np.mean(sq_displacements)
+    if len(lags) == 0:
+        return {'msd_curve': np.array([]), 'diffusion_coefficient': 0.0, 'anomalous_exponent': 1.0}
 
     msd_curve = np.column_stack([lags, msd_values])
 
-    # Linear fit for diffusion coefficient: MSD = 4*D*t (2D)
-    D = 0.0
-    if len(lags) >= 2:
-        fit_n = min(len(lags), 10)
-        coeffs = np.polyfit(lags[:fit_n].astype(float), msd_values[:fit_n], 1)
-        D = coeffs[0] / 4.0
-        D = max(D, 0.0)
-
-    # Log-log fit for anomalous exponent: MSD ~ t^alpha
-    alpha = 1.0
-    if len(lags) >= 3:
-        valid = msd_values > 0
-        if np.sum(valid) >= 2:
-            log_lags = np.log(lags[valid].astype(float))
-            log_msd = np.log(msd_values[valid])
-            coeffs = np.polyfit(log_lags, log_msd, 1)
-            alpha = float(coeffs[0])
+    D = fit_msd_linear(lags, msd_values, ndim=2)
+    _D_anom, alpha = fit_msd_anomalous(lags, msd_values, ndim=2)
 
     return {
         'msd_curve': msd_curve,

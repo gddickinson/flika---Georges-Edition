@@ -13,6 +13,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from flika.simulation.noise import CameraConfig, apply_camera
+
 
 @dataclass
 class PSFConfig:
@@ -202,21 +204,45 @@ class PSFSimulator:
 
     def _add_noise(self, clean: np.ndarray,
                     rng: np.random.Generator) -> np.ndarray:
-        """Add realistic microscopy noise to a clean image."""
+        """Add realistic microscopy noise using the unified camera model.
+
+        Delegates to ``flika.simulation.noise.apply_camera`` with a
+        ``CameraConfig`` derived from this instance's ``PSFConfig``.  The
+        camera model is configured so that its output closely matches the
+        original simple noise model:
+
+        * QE = 1 (clean image already represents detected photons)
+        * gain = 1 (keep ADU == electrons, no rescaling)
+        * baseline = 0 (caller adds background before this step)
+        * bit_depth = 32 (avoid clipping float-range data)
+        * read_noise mapped from ``PSFConfig.read_noise_std``
+
+        For the ``'gaussian'`` noise type (no Poisson), shot noise is
+        suppressed by passing photon values through ``apply_camera`` with
+        a near-zero signal and adding Gaussian noise via the camera's
+        read-noise path.
+        """
         cfg = self.config
-        noisy = clean.copy()
 
         if cfg.noise_type in ('poisson', 'mixed'):
-            # Poisson noise (signal-dependent)
-            noisy = np.maximum(noisy, 0)
-            noisy = rng.poisson(noisy).astype(np.float64)
-
-        if cfg.noise_type in ('gaussian', 'mixed'):
-            # Additive Gaussian read noise
+            # Build a CameraConfig that reproduces the original pipeline:
+            #   Poisson(clean) + Gaussian(0, read_noise_std)
+            cam = CameraConfig(
+                type='sCMOS',
+                quantum_efficiency=1.0,   # clean is already in photons
+                read_noise=cfg.read_noise_std if cfg.noise_type == 'mixed' else 0.0,
+                dark_current=0.0,
+                gain=1.0,
+                baseline=0,
+                bit_depth=32,             # avoid uint16 clipping
+                exposure_time=0.0,
+            )
+            photons = np.maximum(clean, 0)
+            noisy = apply_camera(photons, cam).astype(np.float64)
+        else:
+            # Pure Gaussian: no shot noise, just additive noise
+            noisy = clean.copy()
             noisy += rng.normal(0, cfg.read_noise_std, clean.shape)
-
-        if cfg.noise_type == 'gaussian' and cfg.noise_type != 'mixed':
-            # Pure Gaussian: add background noise
             noisy += rng.normal(0, cfg.background_std, clean.shape)
 
         return noisy

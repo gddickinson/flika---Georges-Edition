@@ -494,6 +494,47 @@ class BaseProcess(object):
             del self.newtif
         return newWindow
 
+    # ---- convenience helpers for building GUI items ----
+
+    def add_slider(self, name, label, value, lo, hi, decimals=2, step=None):
+        """Add a SliderLabel parameter to the GUI."""
+        slider = SliderLabel(decimals)
+        slider.setRange(lo, hi)
+        slider.setValue(value)
+        if step is not None:
+            slider.setSingleStep(step)
+        self.items.append({'name': name, 'string': label, 'object': slider})
+        return slider
+
+    def add_slider_odd(self, name, label, value, lo, hi):
+        """Add an odd-valued SliderLabel parameter."""
+        slider = SliderLabelOdd()
+        slider.setRange(lo, hi)
+        slider.setValue(value)
+        self.items.append({'name': name, 'string': label, 'object': slider})
+        return slider
+
+    def add_checkbox(self, name, label, checked=True):
+        """Add a CheckBox parameter."""
+        cb = CheckBox()
+        cb.setChecked(checked)
+        self.items.append({'name': name, 'string': label, 'object': cb})
+        return cb
+
+    def add_combo(self, name, label, items, default=0):
+        """Add a ComboBox parameter."""
+        combo = ComboBox()
+        combo.addItems(items)
+        combo.setCurrentIndex(default)
+        self.items.append({'name': name, 'string': label, 'object': combo})
+        return combo
+
+    def add_window(self, name='window', label='Window'):
+        """Add a WindowSelector parameter."""
+        ws = WindowSelector()
+        self.items.append({'name': name, 'string': label, 'object': ws})
+        return ws
+
     def gui(self):
         from pyqtgraph import SignalProxy
         self.ui = BaseDialog(self.items, self.__name__, self.__doc__, self)

@@ -15,6 +15,8 @@ from qtpy import QtCore, QtWidgets
 from scipy.optimize import curve_fit
 
 from ..logger import logger
+from ..utils.fitting import r_squared as _r_squared
+from ..utils.msd import msd_single_track as _msd_single_track
 
 
 # ---------------------------------------------------------------------------
@@ -48,47 +50,6 @@ def _cdf_3comp(r2, D1, D2, D3, f1, f2, dt):
     return 1.0 - (f1 * np.exp(-r2 / (4.0 * D1 * dt))
                   + f2 * np.exp(-r2 / (4.0 * D2 * dt))
                   + f3 * np.exp(-r2 / (4.0 * D3 * dt)))
-
-
-# ---------------------------------------------------------------------------
-# MSD computation helpers
-# ---------------------------------------------------------------------------
-
-def _msd_single_track(positions, max_lag):
-    """Compute MSD for a single track.
-
-    Parameters
-    ----------
-    positions : ndarray, shape (N, 2)
-        XY positions in physical units.
-    max_lag : int
-        Maximum lag in frames.
-
-    Returns
-    -------
-    lags : ndarray
-        Lag values (1 .. min(max_lag, N-1)).
-    msd : ndarray
-        Mean squared displacement for each lag.
-    counts : ndarray
-        Number of displacement pairs contributing to each lag.
-    """
-    n = len(positions)
-    if n < 2:
-        return np.array([]), np.array([]), np.array([])
-
-    actual_max = min(max_lag, n - 1)
-    lags = np.arange(1, actual_max + 1)
-    msd = np.empty(len(lags))
-    counts = np.empty(len(lags), dtype=int)
-
-    for i, lag in enumerate(lags):
-        displacements = positions[lag:] - positions[:-lag]
-        sq_disp = np.sum(displacements ** 2, axis=1)
-        msd[i] = np.mean(sq_disp)
-        counts[i] = len(sq_disp)
-
-    return lags, msd, counts
 
 
 # ---------------------------------------------------------------------------
@@ -689,9 +650,7 @@ class DiffusionAnalysisWindow(QtWidgets.QWidget):
             params['residual_sum_sq'] = float(np.sum(residuals ** 2))
 
             # R-squared
-            ss_res = np.sum(residuals ** 2)
-            ss_tot = np.sum((cdf_empirical - np.mean(cdf_empirical)) ** 2)
-            params['r_squared'] = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+            params['r_squared'] = float(_r_squared(cdf_empirical, cdf_fit))
 
         except (RuntimeError, ValueError) as exc:
             logger.error("CDF fitting failed (%d-component): %s",

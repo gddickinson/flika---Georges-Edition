@@ -2,11 +2,17 @@
 from ..logger import logger
 logger.debug("Started 'reading process/frap.py'")
 import numpy as np
-from scipy.optimize import curve_fit
 import pyqtgraph as pg
 from qtpy import QtWidgets, QtCore
 from .. import global_vars as g
 from ..utils.BaseProcess import BaseProcess, WindowSelector, MissingWindowError, CheckBox, SliderLabel, ComboBox
+from ..utils.fitting import (
+    r_squared as _r_squared,
+    exp_recovery,
+    double_exp_recovery,
+    fit_exponential_recovery,
+    fit_double_exponential_recovery,
+)
 
 __all__ = ['frap_analysis']
 
@@ -62,17 +68,14 @@ def normalize_frap(intensities, pre_bleach_frames, bleach_frame):
     return (intensities - post_min) / denom
 
 
-def _single_exp_model(t, A, tau, offset):
-    """y = A * (1 - exp(-t / tau)) + offset"""
-    return A * (1.0 - np.exp(-t / tau)) + offset
-
-
 def fit_single_exponential(time, intensities):
     """Fit a single-exponential recovery model to normalized FRAP data.
 
     Model::
 
         y = A * (1 - exp(-t / tau)) + offset
+
+    Delegates to :func:`flika.utils.fitting.fit_exponential_recovery`.
 
     Parameters
     ----------
@@ -85,7 +88,7 @@ def fit_single_exponential(time, intensities):
     -------
     dict
         Keys: tau, mobile_fraction, immobile_fraction, r_squared, fit_curve.
-        Returns None values on fit failure.
+        Returns NaN values on fit failure.
     """
     time = np.asarray(time, dtype=np.float64)
     intensities = np.asarray(intensities, dtype=np.float64)
@@ -101,31 +104,12 @@ def fit_single_exponential(time, intensities):
     if time.size < 3:
         return result
 
-    # Initial guesses: A ~ recovery range, tau ~ half the time span, offset ~ minimum
-    A0 = float(np.max(intensities) - np.min(intensities))
-    tau0 = float((time[-1] - time[0]) / 2.0)
-    offset0 = float(np.min(intensities))
-
-    if tau0 <= 0:
-        tau0 = 1.0
-
     try:
-        popt, _ = curve_fit(
-            _single_exp_model, time, intensities,
-            p0=[A0, tau0, offset0],
-            bounds=([0, 1e-12, -np.inf], [np.inf, np.inf, np.inf]),
-            maxfev=10000,
-        )
-        A, tau, offset = popt
+        (A, tau, offset), r2 = fit_exponential_recovery(time, intensities)
     except (RuntimeError, ValueError):
         return result
 
-    fit_curve = _single_exp_model(time, A, tau, offset)
-
-    # R-squared
-    ss_res = np.sum((intensities - fit_curve) ** 2)
-    ss_tot = np.sum((intensities - np.mean(intensities)) ** 2)
-    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
+    fit_curve = exp_recovery(time, A, tau, offset)
 
     # Mobile fraction = plateau value = A + offset
     mobile_fraction = float(A + offset)
@@ -134,15 +118,10 @@ def fit_single_exponential(time, intensities):
     result['tau'] = float(tau)
     result['mobile_fraction'] = float(mobile_fraction)
     result['immobile_fraction'] = float(immobile_fraction)
-    result['r_squared'] = float(r_squared)
+    result['r_squared'] = float(r2)
     result['fit_curve'] = fit_curve
 
     return result
-
-
-def _double_exp_model(t, A1, tau1, A2, tau2, offset):
-    """y = A1 * (1 - exp(-t / tau1)) + A2 * (1 - exp(-t / tau2)) + offset"""
-    return A1 * (1.0 - np.exp(-t / tau1)) + A2 * (1.0 - np.exp(-t / tau2)) + offset
 
 
 def fit_double_exponential(time, intensities):
@@ -151,6 +130,8 @@ def fit_double_exponential(time, intensities):
     Model::
 
         y = A1*(1 - exp(-t/tau1)) + A2*(1 - exp(-t/tau2)) + offset
+
+    Delegates to :func:`flika.utils.fitting.fit_double_exponential_recovery`.
 
     Parameters
     ----------
@@ -183,45 +164,13 @@ def fit_double_exponential(time, intensities):
     if time.size < 5:
         return result
 
-    A_total = float(np.max(intensities) - np.min(intensities))
-    t_span = float(time[-1] - time[0])
-    offset0 = float(np.min(intensities))
-
-    if t_span <= 0:
-        t_span = 1.0
-
-    # Initial guesses: fast and slow components
-    A1_0 = A_total * 0.6
-    tau1_0 = t_span / 4.0
-    A2_0 = A_total * 0.4
-    tau2_0 = t_span
-    p0 = [A1_0, tau1_0, A2_0, tau2_0, offset0]
-
     try:
-        popt, _ = curve_fit(
-            _double_exp_model, time, intensities,
-            p0=p0,
-            bounds=(
-                [0, 1e-12, 0, 1e-12, -np.inf],
-                [np.inf, np.inf, np.inf, np.inf, np.inf],
-            ),
-            maxfev=20000,
-        )
-        A1, tau1, A2, tau2, offset = popt
+        (A1, tau1, A2, tau2, offset), r2 = fit_double_exponential_recovery(
+            time, intensities)
     except (RuntimeError, ValueError):
         return result
 
-    # Ensure tau1 <= tau2 (fast component first)
-    if tau1 > tau2:
-        A1, A2 = A2, A1
-        tau1, tau2 = tau2, tau1
-
-    fit_curve = _double_exp_model(time, A1, tau1, A2, tau2, offset)
-
-    # R-squared
-    ss_res = np.sum((intensities - fit_curve) ** 2)
-    ss_tot = np.sum((intensities - np.mean(intensities)) ** 2)
-    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
+    fit_curve = double_exp_recovery(time, A1, tau1, A2, tau2, offset)
 
     A_sum = A1 + A2
     if A_sum > 0:
@@ -239,7 +188,7 @@ def fit_double_exponential(time, intensities):
     result['fraction2'] = frac2
     result['mobile_fraction'] = float(mobile_fraction)
     result['immobile_fraction'] = float(immobile_fraction)
-    result['r_squared'] = float(r_squared)
+    result['r_squared'] = float(r2)
     result['fit_curve'] = fit_curve
 
     return result

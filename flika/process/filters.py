@@ -1650,55 +1650,6 @@ def _maximum_filter_impl(tif, size):
         return result
 
 
-class Maximum_Filter(BaseProcess):
-    """ maximum_filter(size, keepSourceWindow=False)
-
-    Applies a spatial maximum filter to every frame of your stack.
-
-    Args:
-        size (int): Size of the filter kernel (must be odd)
-
-    Returns:
-        flika.window.Window
-    """
-    def __init__(self):
-        super().__init__()
-
-    def gui(self):
-        self.gui_reset()
-        size = SliderLabelOdd()
-        size.setRange(3, 51)
-        size.setValue(3)
-        preview = CheckBox()
-        preview.setChecked(True)
-        self.items.append({'name': 'size', 'string': 'Kernel Size', 'object': size})
-        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
-        super().gui()
-        self.preview()
-
-    def __call__(self, size, keepSourceWindow=False):
-        self.start(keepSourceWindow)
-        self.newtif = _maximum_filter_impl(self.tif, size)
-        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
-        self.newname = self.oldname + ' - Maximum Filter size=' + str(size)
-        return self.end()
-
-    def preview(self):
-        size = self.getValue('size')
-        preview = self.getValue('preview')
-        if preview:
-            if len(g.win.image.shape) == 3:
-                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
-            elif len(g.win.image.shape) == 2:
-                testimage = g.win.image.astype(np.float64)
-            testimage = nd_maximum_filter(testimage, size=size)
-            g.win.imageview.setImage(testimage, autoLevels=False)
-        else:
-            g.win.reset()
-
-maximum_filter = Maximum_Filter()
-
-
 @per_plane
 def _minimum_filter_impl(tif, size):
     if tif.ndim == 2:
@@ -1708,55 +1659,6 @@ def _minimum_filter_impl(tif, size):
         for i in range(len(tif)):
             result[i] = nd_minimum_filter(tif[i].astype(np.float64), size=size)
         return result
-
-
-class Minimum_Filter(BaseProcess):
-    """ minimum_filter(size, keepSourceWindow=False)
-
-    Applies a spatial minimum filter to every frame of your stack.
-
-    Args:
-        size (int): Size of the filter kernel (must be odd)
-
-    Returns:
-        flika.window.Window
-    """
-    def __init__(self):
-        super().__init__()
-
-    def gui(self):
-        self.gui_reset()
-        size = SliderLabelOdd()
-        size.setRange(3, 51)
-        size.setValue(3)
-        preview = CheckBox()
-        preview.setChecked(True)
-        self.items.append({'name': 'size', 'string': 'Kernel Size', 'object': size})
-        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
-        super().gui()
-        self.preview()
-
-    def __call__(self, size, keepSourceWindow=False):
-        self.start(keepSourceWindow)
-        self.newtif = _minimum_filter_impl(self.tif, size)
-        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
-        self.newname = self.oldname + ' - Minimum Filter size=' + str(size)
-        return self.end()
-
-    def preview(self):
-        size = self.getValue('size')
-        preview = self.getValue('preview')
-        if preview:
-            if len(g.win.image.shape) == 3:
-                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
-            elif len(g.win.image.shape) == 2:
-                testimage = g.win.image.astype(np.float64)
-            testimage = nd_minimum_filter(testimage, size=size)
-            g.win.imageview.setImage(testimage, autoLevels=False)
-        else:
-            g.win.reset()
-
-minimum_filter = Minimum_Filter()
 
 
 @per_plane
@@ -1770,7 +1672,110 @@ def _percentile_filter_impl(tif, percentile, size):
         return result
 
 
-class Percentile_Filter(BaseProcess):
+class _BaseRankFilter(BaseProcess):
+    """Base class for rank-order filters (max, min, percentile).
+
+    Subclasses set:
+        _filter_name (str): Display name (e.g. 'Maximum')
+        _impl_func: The @per_plane implementation function
+        _nd_func: The scipy.ndimage filter for preview
+        _has_percentile (bool): Whether this filter takes a percentile param
+    """
+    _filter_name = ''
+    _impl_func = None
+    _nd_func = None
+    _has_percentile = False
+
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        if self._has_percentile:
+            self.add_slider('percentile', 'Percentile', 50, 0, 100, decimals=2)
+        self.add_slider_odd('size', 'Kernel Size', 3, 3, 51)
+        self.add_checkbox('preview', 'Preview', checked=True)
+        super().gui()
+        self.preview()
+
+    def __call__(self, *args, **kwargs):
+        # Dispatch to the specific _call implementation
+        return self._call_impl(*args, **kwargs)
+
+    def _call_impl(self, size, percentile=None, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        if self._has_percentile:
+            self.newtif = self._impl_func(self.tif, percentile, size)
+            self.newname = self.oldname + ' - {} Filter p={} size={}'.format(
+                self._filter_name, percentile, size)
+        else:
+            self.newtif = self._impl_func(self.tif, size)
+            self.newname = self.oldname + ' - {} Filter size={}'.format(
+                self._filter_name, size)
+        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
+        return self.end()
+
+    def preview(self):
+        size = self.getValue('size')
+        preview = self.getValue('preview')
+        if preview:
+            if len(g.win.image.shape) == 3:
+                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
+            elif len(g.win.image.shape) == 2:
+                testimage = g.win.image.astype(np.float64)
+            if self._has_percentile:
+                percentile = self.getValue('percentile')
+                testimage = self._nd_func(testimage, percentile=percentile, size=size)
+            else:
+                testimage = self._nd_func(testimage, size=size)
+            g.win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            g.win.reset()
+
+
+class Maximum_Filter(_BaseRankFilter):
+    """ maximum_filter(size, keepSourceWindow=False)
+
+    Applies a spatial maximum filter to every frame of your stack.
+
+    Args:
+        size (int): Size of the filter kernel (must be odd)
+
+    Returns:
+        flika.window.Window
+    """
+    _filter_name = 'Maximum'
+    _impl_func = staticmethod(_maximum_filter_impl)
+    _nd_func = staticmethod(nd_maximum_filter)
+
+    def __call__(self, size, keepSourceWindow=False):
+        return self._call_impl(size, keepSourceWindow=keepSourceWindow)
+
+maximum_filter = Maximum_Filter()
+
+
+class Minimum_Filter(_BaseRankFilter):
+    """ minimum_filter(size, keepSourceWindow=False)
+
+    Applies a spatial minimum filter to every frame of your stack.
+
+    Args:
+        size (int): Size of the filter kernel (must be odd)
+
+    Returns:
+        flika.window.Window
+    """
+    _filter_name = 'Minimum'
+    _impl_func = staticmethod(_minimum_filter_impl)
+    _nd_func = staticmethod(nd_minimum_filter)
+
+    def __call__(self, size, keepSourceWindow=False):
+        return self._call_impl(size, keepSourceWindow=keepSourceWindow)
+
+minimum_filter = Minimum_Filter()
+
+
+class Percentile_Filter(_BaseRankFilter):
     """ percentile_filter(percentile, size, keepSourceWindow=False)
 
     Applies a spatial percentile filter to every frame of your stack.
@@ -1782,45 +1787,13 @@ class Percentile_Filter(BaseProcess):
     Returns:
         flika.window.Window
     """
-    def __init__(self):
-        super().__init__()
-
-    def gui(self):
-        self.gui_reset()
-        percentile = SliderLabel(2)
-        percentile.setRange(0, 100)
-        percentile.setValue(50)
-        size = SliderLabelOdd()
-        size.setRange(3, 51)
-        size.setValue(3)
-        preview = CheckBox()
-        preview.setChecked(True)
-        self.items.append({'name': 'percentile', 'string': 'Percentile', 'object': percentile})
-        self.items.append({'name': 'size', 'string': 'Kernel Size', 'object': size})
-        self.items.append({'name': 'preview', 'string': 'Preview', 'object': preview})
-        super().gui()
-        self.preview()
+    _filter_name = 'Percentile'
+    _impl_func = staticmethod(_percentile_filter_impl)
+    _nd_func = staticmethod(nd_percentile_filter)
+    _has_percentile = True
 
     def __call__(self, percentile, size, keepSourceWindow=False):
-        self.start(keepSourceWindow)
-        self.newtif = _percentile_filter_impl(self.tif, percentile, size)
-        self.newtif = self.newtif.astype(g.settings['internal_data_type'])
-        self.newname = self.oldname + ' - Percentile Filter p={} size={}'.format(percentile, size)
-        return self.end()
-
-    def preview(self):
-        percentile = self.getValue('percentile')
-        size = self.getValue('size')
-        preview = self.getValue('preview')
-        if preview:
-            if len(g.win.image.shape) == 3:
-                testimage = g.win.image[g.win.currentIndex].astype(np.float64)
-            elif len(g.win.image.shape) == 2:
-                testimage = g.win.image.astype(np.float64)
-            testimage = nd_percentile_filter(testimage, percentile=percentile, size=size)
-            g.win.imageview.setImage(testimage, autoLevels=False)
-        else:
-            g.win.reset()
+        return self._call_impl(size, percentile=percentile, keepSourceWindow=keepSourceWindow)
 
 percentile_filter = Percentile_Filter()
 
@@ -2078,18 +2051,15 @@ class Bleach_Correction(BaseProcess):
         return self.end()
 
     def _exponential_fit(self, tif):
-        from scipy.optimize import curve_fit
+        from ..utils.fitting import exp_decay, fit_exponential_decay
         mt = tif.shape[0]
         mean_trace = np.array([tif[t].mean() for t in range(mt)])
         t_vals = np.arange(mt, dtype=np.float64)
 
-        def exp_decay(t, a, b, c):
-            return a * np.exp(-b * t) + c
-
         try:
-            p0 = [mean_trace[0] - mean_trace[-1], 0.01, mean_trace[-1]]
-            popt, _ = curve_fit(exp_decay, t_vals, mean_trace, p0=p0, maxfev=5000)
-            fit = exp_decay(t_vals, *popt)
+            p0 = (mean_trace[0] - mean_trace[-1], 0.01, mean_trace[-1])
+            (amp, rate, off), _ = fit_exponential_decay(t_vals, mean_trace, p0=p0)
+            fit = exp_decay(t_vals, amp, rate, off)
             fit = np.maximum(fit, 1e-10)
             correction = fit[0] / fit
         except Exception:

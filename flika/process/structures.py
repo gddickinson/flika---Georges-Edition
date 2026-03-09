@@ -9,6 +9,7 @@ from qtpy import QtWidgets, QtCore
 from .. import global_vars as g
 from ..utils.BaseProcess import BaseProcess, SliderLabel, CheckBox, ComboBox
 from ..utils.ndim import per_plane
+from ..utils.drawing import draw_line, draw_circle, draw_crosses
 from ..logger import logger
 
 logger.debug("Started 'reading process/structures.py'")
@@ -25,33 +26,6 @@ __all__ = [
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _draw_line_on_image(image, y0, x0, y1, x1, value):
-    """Draw a line using skimage.draw.line, clipping to image bounds."""
-    rr, cc = draw.line(int(round(y0)), int(round(x0)),
-                       int(round(y1)), int(round(x1)))
-    mask = (rr >= 0) & (rr < image.shape[0]) & (cc >= 0) & (cc < image.shape[1])
-    image[rr[mask], cc[mask]] = value
-
-
-def _draw_circle_on_image(image, cy, cx, radius, value):
-    """Draw a circle perimeter using skimage.draw."""
-    rr, cc = draw.circle_perimeter(int(round(cy)), int(round(cx)),
-                                   int(round(radius)), shape=image.shape)
-    image[rr, cc] = value
-
-
-def _draw_crosses(image, coords, value, arm=2):
-    """Draw small crosses at (y, x) locations."""
-    for y, x in coords:
-        y, x = int(round(y)), int(round(x))
-        for dy in range(-arm, arm + 1):
-            cy = y + dy
-            if 0 <= cy < image.shape[0] and 0 <= x < image.shape[1]:
-                image[cy, x] = value
-        for dx in range(-arm, arm + 1):
-            cx = x + dx
-            if 0 <= y < image.shape[0] and 0 <= cx < image.shape[1]:
-                image[y, cx] = value
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +153,24 @@ def _trace_segments(skeleton, branch_points, endpoints):
 # Priority 1: Tubule / Network Analysis
 # ===================================================================
 
+@per_plane(expects_2d=True)
+def _frangi_2d(image, sigmas, black_ridges):
+    """Apply Frangi vesselness filter to a single 2D frame."""
+    return filters.frangi(image, sigmas=sigmas, black_ridges=black_ridges)
+
+
+@per_plane(expects_2d=True)
+def _skeletonize_2d(image):
+    """Skeletonize a single 2D binary frame."""
+    return morphology.skeletonize(image > 0).astype(np.float64)
+
+
+@per_plane(expects_2d=True)
+def _lbp_2d(image, P, R, method):
+    """Compute LBP on a single 2D frame."""
+    return feature.local_binary_pattern(image, P, R, method=method)
+
+
 class Frangi_Vesselness(BaseProcess):
     """frangi_vesselness(sigma_min=1.0, sigma_max=5.0, black_ridges=False, keepSourceWindow=False)
 
@@ -219,12 +211,7 @@ class Frangi_Vesselness(BaseProcess):
         self.start(keepSourceWindow)
         tif = self.tif.astype(np.float64)
         sigmas = np.linspace(sigma_min, sigma_max, max(int(sigma_max - sigma_min) + 1, 2))
-        if tif.ndim == 3:
-            result = np.zeros(tif.shape, dtype=np.float64)
-            for i in range(len(tif)):
-                result[i] = filters.frangi(tif[i], sigmas=sigmas, black_ridges=black_ridges)
-        elif tif.ndim == 2:
-            result = filters.frangi(tif, sigmas=sigmas, black_ridges=black_ridges)
+        result = _frangi_2d(tif, sigmas, black_ridges)
         self.newtif = result.astype(g.settings['internal_data_type'])
         self.newname = self.oldname + ' - Frangi Vesselness'
         return self.end()
@@ -266,14 +253,7 @@ class Skeletonize_Process(BaseProcess):
 
     def __call__(self, keepSourceWindow=False):
         self.start(keepSourceWindow)
-        tif = self.tif
-        if tif.ndim == 3:
-            result = np.zeros(tif.shape, dtype=np.float64)
-            for i in range(len(tif)):
-                result[i] = morphology.skeletonize(tif[i] > 0).astype(np.float64)
-        elif tif.ndim == 2:
-            result = morphology.skeletonize(tif > 0).astype(np.float64)
-        self.newtif = result
+        self.newtif = _skeletonize_2d(self.tif)
         self.newname = self.oldname + ' - Skeleton'
         return self.end()
 
@@ -397,9 +377,9 @@ class Skeleton_Analysis(BaseProcess):
                 marked = tif[i].astype(np.float64).copy()
                 mark_val = max(np.max(marked) * 1.5, 1.0)
                 if analysis['branch_points']:
-                    _draw_crosses(marked, analysis['branch_points'], mark_val, arm=2)
+                    draw_crosses(marked, analysis['branch_points'], size=2, value=mark_val)
                 if analysis['endpoints']:
-                    _draw_crosses(marked, analysis['endpoints'], mark_val * 0.7, arm=1)
+                    draw_crosses(marked, analysis['endpoints'], size=1, value=mark_val * 0.7)
                 result[i] = marked
         elif tif.ndim == 2:
             analysis = _analyze_frame(tif, 0)
@@ -407,9 +387,9 @@ class Skeleton_Analysis(BaseProcess):
             marked = tif.astype(np.float64).copy()
             mark_val = max(np.max(marked) * 1.5, 1.0)
             if analysis['branch_points']:
-                _draw_crosses(marked, analysis['branch_points'], mark_val, arm=2)
+                draw_crosses(marked, analysis['branch_points'], size=2, value=mark_val)
             if analysis['endpoints']:
-                _draw_crosses(marked, analysis['endpoints'], mark_val * 0.7, arm=1)
+                draw_crosses(marked, analysis['endpoints'], size=1, value=mark_val * 0.7)
             result = marked
 
         self.newtif = result
@@ -482,7 +462,7 @@ class Hough_Lines(BaseProcess):
             marked = frame_2d.copy()
             mark_val = max(np.max(marked) * 1.2, 1.0)
             for (x0, y0), (x1, y1) in lines:
-                _draw_line_on_image(marked, y0, x0, y1, x1, mark_val)
+                draw_line(marked, y0, x0, y1, x1, mark_val)
                 length = np.hypot(x1 - x0, y1 - y0)
                 angle = np.degrees(np.arctan2(y1 - y0, x1 - x0))
                 all_lines.append({
@@ -570,7 +550,7 @@ class Hough_Circles(BaseProcess):
             marked = frame_2d.copy()
             mark_val = max(np.max(marked) * 1.2, 1.0)
             for acc, x, y, r in zip(accums, cx, cy, found_radii):
-                _draw_circle_on_image(marked, y, x, r, mark_val)
+                draw_circle(marked, y, x, r, mark_val)
                 all_circles.append({
                     'frame': frame_idx,
                     'center_y': int(y),
@@ -648,7 +628,7 @@ class Corner_Detection(BaseProcess):
             coords = feature.corner_peaks(response, min_distance=int(min_distance))
             marked = frame_2d.copy()
             mark_val = max(np.max(marked) * 1.2, 1.0)
-            _draw_crosses(marked, coords, mark_val, arm=2)
+            draw_crosses(marked, coords, size=2, value=mark_val)
             for c in coords:
                 all_corners.append([frame_idx, int(c[0]), int(c[1])])
             return marked
@@ -713,12 +693,7 @@ class Local_Binary_Pattern_Process(BaseProcess):
         self.start(keepSourceWindow)
         tif = self.tif.astype(np.float64)
         P_int = int(P)
-        if tif.ndim == 3:
-            result = np.zeros(tif.shape, dtype=np.float64)
-            for i in range(len(tif)):
-                result[i] = feature.local_binary_pattern(tif[i], P_int, R, method=method)
-        elif tif.ndim == 2:
-            result = feature.local_binary_pattern(tif, P_int, R, method=method)
+        result = _lbp_2d(tif, P_int, R, method)
         self.newtif = result.astype(g.settings['internal_data_type'])
         self.newname = self.oldname + ' - LBP P={} R={}'.format(P_int, R)
         return self.end()

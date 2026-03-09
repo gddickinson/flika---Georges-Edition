@@ -19,16 +19,9 @@ __all__ = ['connected_components', 'region_properties', 'clear_border',
 # Connected Components
 # ---------------------------------------------------------------------------
 
-@per_plane
+@per_plane(expects_2d=True)
 def _connected_components_impl(tif, connectivity):
-    if tif.ndim == 2:
-        return measure.label(tif > 0, connectivity=connectivity).astype(np.float64)
-    elif tif.ndim == 3:
-        result = np.zeros(tif.shape, dtype=np.float64)
-        for i in range(len(result)):
-            result[i] = measure.label(tif[i] > 0, connectivity=connectivity).astype(np.float64)
-        return result
-    return tif
+    return measure.label(tif > 0, connectivity=connectivity).astype(np.float64)
 
 
 class Connected_Components(BaseProcess):
@@ -212,16 +205,9 @@ region_properties = Region_Properties()
 # Clear Border
 # ---------------------------------------------------------------------------
 
-@per_plane
+@per_plane(expects_2d=True)
 def _clear_border_impl(tif, buffer_size):
-    if tif.ndim == 2:
-        return segmentation.clear_border(tif.astype(np.intp), buffer_size=buffer_size).astype(np.float64)
-    elif tif.ndim == 3:
-        result = np.zeros(tif.shape, dtype=np.float64)
-        for i in range(len(result)):
-            result[i] = segmentation.clear_border(tif[i].astype(np.intp), buffer_size=buffer_size).astype(np.float64)
-        return result
-    return tif
+    return segmentation.clear_border(tif.astype(np.intp), buffer_size=buffer_size).astype(np.float64)
 
 
 class Clear_Border(BaseProcess):
@@ -271,16 +257,9 @@ clear_border = Clear_Border()
 # Expand Labels
 # ---------------------------------------------------------------------------
 
-@per_plane
+@per_plane(expects_2d=True)
 def _expand_labels_impl(tif, distance):
-    if tif.ndim == 2:
-        return segmentation.expand_labels(tif.astype(np.intp), distance=distance).astype(np.float64)
-    elif tif.ndim == 3:
-        result = np.zeros(tif.shape, dtype=np.float64)
-        for i in range(len(result)):
-            result[i] = segmentation.expand_labels(tif[i].astype(np.intp), distance=distance).astype(np.float64)
-        return result
-    return tif
+    return segmentation.expand_labels(tif.astype(np.intp), distance=distance).astype(np.float64)
 
 
 class Expand_Labels(BaseProcess):
@@ -330,17 +309,9 @@ expand_labels = Expand_Labels()
 # Random Walker Segmentation
 # ---------------------------------------------------------------------------
 
-@per_plane
+@per_plane(expects_2d=True)
 def _random_walker_impl(tif, beta, mode):
-    if tif.ndim == 2:
-        return segmentation.random_walker(tif, tif.astype(np.intp), beta=beta, mode=mode).astype(np.float64)
-    elif tif.ndim == 3:
-        result = np.zeros(tif.shape, dtype=np.float64)
-        for i in range(len(result)):
-            result[i] = segmentation.random_walker(
-                tif[i], tif[i].astype(np.intp), beta=beta, mode=mode).astype(np.float64)
-        return result
-    return tif
+    return segmentation.random_walker(tif, tif.astype(np.intp), beta=beta, mode=mode).astype(np.float64)
 
 
 class Random_Walker_Seg(BaseProcess):
@@ -426,20 +397,11 @@ random_walker_seg = Random_Walker_Seg()
 # SLIC Superpixels
 # ---------------------------------------------------------------------------
 
-@per_plane
+@per_plane(expects_2d=True)
 def _slic_impl(tif, n_segments, compactness, sigma):
-    if tif.ndim == 2:
-        return segmentation.slic(tif.astype(np.float64), n_segments=n_segments,
-                                 compactness=compactness, sigma=sigma,
-                                 start_label=1, channel_axis=None).astype(np.float64)
-    elif tif.ndim == 3:
-        result = np.zeros(tif.shape, dtype=np.float64)
-        for i in range(len(result)):
-            result[i] = segmentation.slic(tif[i].astype(np.float64), n_segments=n_segments,
-                                          compactness=compactness, sigma=sigma,
-                                          start_label=1, channel_axis=None).astype(np.float64)
-        return result
-    return tif
+    return segmentation.slic(tif.astype(np.float64), n_segments=n_segments,
+                             compactness=compactness, sigma=sigma,
+                             start_label=1, channel_axis=None).astype(np.float64)
 
 
 class SLIC_Superpixels(BaseProcess):
@@ -500,16 +462,9 @@ slic_superpixels = SLIC_Superpixels()
 # Find Boundaries
 # ---------------------------------------------------------------------------
 
-@per_plane
+@per_plane(expects_2d=True)
 def _find_boundaries_impl(tif, mode):
-    if tif.ndim == 2:
-        return segmentation.find_boundaries(tif.astype(np.intp), mode=mode).astype(np.float64)
-    elif tif.ndim == 3:
-        result = np.zeros(tif.shape, dtype=np.float64)
-        for i in range(len(result)):
-            result[i] = segmentation.find_boundaries(tif[i].astype(np.intp), mode=mode).astype(np.float64)
-        return result
-    return tif
+    return segmentation.find_boundaries(tif.astype(np.intp), mode=mode).astype(np.float64)
 
 
 class Find_Boundaries(BaseProcess):

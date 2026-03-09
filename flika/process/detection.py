@@ -5,6 +5,7 @@ from qtpy import QtWidgets, QtCore
 from .. import global_vars as g
 from ..utils.BaseProcess import BaseProcess, SliderLabel, CheckBox, ComboBox, WindowSelector, MissingWindowError
 from ..utils.ndim import per_plane
+from ..utils.drawing import draw_circles, draw_crosses
 from ..logger import logger
 
 logger.debug("Started 'reading process/detection.py'")
@@ -30,14 +31,10 @@ def _draw_blob_circles(image, blobs):
     """
     marked = np.array(image, dtype=np.float64)
     mark_val = np.max(marked) * 1.2 if np.max(marked) != 0 else 1.0
-    for y, x, sigma in blobs:
-        r = int(np.ceil(sigma * np.sqrt(2)))
-        y, x = int(round(y)), int(round(x))
-        for angle in np.linspace(0, 2 * np.pi, max(20, int(2 * np.pi * r))):
-            cy = int(round(y + r * np.sin(angle)))
-            cx = int(round(x + r * np.cos(angle)))
-            if 0 <= cy < marked.shape[0] and 0 <= cx < marked.shape[1]:
-                marked[cy, cx] = mark_val
+    if len(blobs) > 0:
+        centers = blobs[:, :2]
+        radii = np.ceil(blobs[:, 2] * np.sqrt(2)).astype(int)
+        draw_circles(marked, centers, radii, value=mark_val)
     return marked
 
 
@@ -58,23 +55,76 @@ def _draw_peaks(image, coords):
     """
     marked = np.array(image, dtype=np.float64)
     mark_val = np.max(marked) * 1.2 if np.max(marked) != 0 else 1.0
-    for y, x in coords:
-        y, x = int(round(y)), int(round(x))
-        # Draw a small cross
-        for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1), (0, 0)]:
-            cy, cx = y + dy, x + dx
-            if 0 <= cy < marked.shape[0] and 0 <= cx < marked.shape[1]:
-                marked[cy, cx] = mark_val
+    draw_crosses(marked, coords, size=1, value=mark_val)
     return marked
 
 
-class Blob_Detection_LoG(BaseProcess):
+class _BaseBlobDetection(BaseProcess):
+    """Base class for blob detection methods (LoG, DoH).
+
+    Subclasses set:
+        _blob_func: The skimage.feature blob detection function
+        _method_name (str): Short name for display (e.g. 'LoG', 'DoH')
+        _default_threshold (float): Default detection threshold
+    """
+    _blob_func = None
+    _method_name = ''
+    _default_threshold = 0.1
+
+    def __init__(self):
+        super().__init__()
+
+    def gui(self):
+        self.gui_reset()
+        self.add_slider('min_sigma', 'Min Sigma', 1.0, 0.5, 20, decimals=2)
+        self.add_slider('max_sigma', 'Max Sigma', 10.0, 1, 50, decimals=2)
+        self.add_slider('num_sigma', 'Num Sigma', 10, 5, 50, decimals=0)
+        self.add_slider('threshold', 'Threshold', self._default_threshold, 0.001, 1.0, decimals=3)
+        super().gui()
+
+    def _detect(self, min_sigma=1.0, max_sigma=10.0, num_sigma=10, threshold=None, keepSourceWindow=False):
+        if threshold is None:
+            threshold = self._default_threshold
+        self.start(keepSourceWindow)
+        tif = self.tif.astype(np.float64)
+        all_blobs = []
+        if tif.ndim == 3:
+            result = np.zeros_like(tif, dtype=np.float64)
+            for i in range(len(tif)):
+                blobs = self._blob_func(tif[i], min_sigma=min_sigma,
+                                        max_sigma=max_sigma,
+                                        num_sigma=int(num_sigma),
+                                        threshold=threshold)
+                result[i] = _draw_blob_circles(tif[i], blobs)
+                for b in blobs:
+                    all_blobs.append([i, b[0], b[1], b[2]])
+        elif tif.ndim == 2:
+            blobs = self._blob_func(tif, min_sigma=min_sigma,
+                                    max_sigma=max_sigma,
+                                    num_sigma=int(num_sigma),
+                                    threshold=threshold)
+            result = _draw_blob_circles(tif, blobs)
+            for b in blobs:
+                all_blobs.append([0, b[0], b[1], b[2]])
+        self.newtif = result
+        self.newname = self.oldname + ' - {} Blobs'.format(self._method_name)
+        newWindow = self.end()
+        if newWindow is not None:
+            blob_array = np.array(all_blobs) if len(all_blobs) > 0 else np.empty((0, 4))
+            newWindow.metadata['blobs'] = blob_array
+        return newWindow
+
+
+class Blob_Detection_LoG(_BaseBlobDetection):
     """blob_detection_log(min_sigma=1.0, max_sigma=10.0, num_sigma=10, threshold=0.1, keepSourceWindow=False)
 
     Detect blobs using the Laplacian of Gaussian (LoG) method.
     Blobs are detected in each frame and their coordinates are stored
     in window.metadata['blobs'].
 
+    Note: For single-particle tracking workflows with sub-pixel localization
+    and linking, use Analyze > SPT Analysis > SPT Control Panel instead.
+
     Parameters:
         min_sigma (float): Minimum sigma for Gaussian kernel
         max_sigma (float): Maximum sigma for Gaussian kernel
@@ -84,70 +134,26 @@ class Blob_Detection_LoG(BaseProcess):
     Returns:
         flika.window.Window
     """
-    def __init__(self):
-        super().__init__()
-
-    def gui(self):
-        self.gui_reset()
-        min_sigma = SliderLabel(2)
-        min_sigma.setRange(0.5, 20)
-        min_sigma.setValue(1.0)
-        max_sigma = SliderLabel(2)
-        max_sigma.setRange(1, 50)
-        max_sigma.setValue(10.0)
-        num_sigma = SliderLabel(0)
-        num_sigma.setRange(5, 50)
-        num_sigma.setValue(10)
-        threshold = SliderLabel(3)
-        threshold.setRange(0.001, 1.0)
-        threshold.setValue(0.1)
-        self.items.append({'name': 'min_sigma', 'string': 'Min Sigma', 'object': min_sigma})
-        self.items.append({'name': 'max_sigma', 'string': 'Max Sigma', 'object': max_sigma})
-        self.items.append({'name': 'num_sigma', 'string': 'Num Sigma', 'object': num_sigma})
-        self.items.append({'name': 'threshold', 'string': 'Threshold', 'object': threshold})
-        super().gui()
+    _blob_func = staticmethod(feature.blob_log)
+    _method_name = 'LoG'
+    _default_threshold = 0.1
 
     def __call__(self, min_sigma=1.0, max_sigma=10.0, num_sigma=10, threshold=0.1, keepSourceWindow=False):
-        self.start(keepSourceWindow)
-        tif = self.tif.astype(np.float64)
-        all_blobs = []
-        if tif.ndim == 3:
-            result = np.zeros_like(tif, dtype=np.float64)
-            for i in range(len(tif)):
-                blobs = feature.blob_log(tif[i], min_sigma=min_sigma,
-                                         max_sigma=max_sigma,
-                                         num_sigma=int(num_sigma),
-                                         threshold=threshold)
-                result[i] = _draw_blob_circles(tif[i], blobs)
-                # Store with frame index
-                for b in blobs:
-                    all_blobs.append([i, b[0], b[1], b[2]])
-        elif tif.ndim == 2:
-            blobs = feature.blob_log(tif, min_sigma=min_sigma,
-                                     max_sigma=max_sigma,
-                                     num_sigma=int(num_sigma),
-                                     threshold=threshold)
-            result = _draw_blob_circles(tif, blobs)
-            for b in blobs:
-                all_blobs.append([0, b[0], b[1], b[2]])
-        self.newtif = result
-        self.newname = self.oldname + ' - LoG Blobs'
-        newWindow = self.end()
-        if newWindow is not None:
-            blob_array = np.array(all_blobs) if len(all_blobs) > 0 else np.empty((0, 4))
-            newWindow.metadata['blobs'] = blob_array
-        return newWindow
+        return self._detect(min_sigma, max_sigma, num_sigma, threshold, keepSourceWindow)
 
 blob_detection_log = Blob_Detection_LoG()
 
 
-class Blob_Detection_DoH(BaseProcess):
+class Blob_Detection_DoH(_BaseBlobDetection):
     """blob_detection_doh(min_sigma=1.0, max_sigma=10.0, num_sigma=10, threshold=0.01, keepSourceWindow=False)
 
     Detect blobs using the Determinant of Hessian (DoH) method.
     Blobs are detected in each frame and their coordinates are stored
     in window.metadata['blobs'].
 
+    Note: For single-particle tracking workflows with sub-pixel localization
+    and linking, use Analyze > SPT Analysis > SPT Control Panel instead.
+
     Parameters:
         min_sigma (float): Minimum sigma for Gaussian kernel
         max_sigma (float): Maximum sigma for Gaussian kernel
@@ -157,58 +163,12 @@ class Blob_Detection_DoH(BaseProcess):
     Returns:
         flika.window.Window
     """
-    def __init__(self):
-        super().__init__()
-
-    def gui(self):
-        self.gui_reset()
-        min_sigma = SliderLabel(2)
-        min_sigma.setRange(0.5, 20)
-        min_sigma.setValue(1.0)
-        max_sigma = SliderLabel(2)
-        max_sigma.setRange(1, 50)
-        max_sigma.setValue(10.0)
-        num_sigma = SliderLabel(0)
-        num_sigma.setRange(5, 50)
-        num_sigma.setValue(10)
-        threshold = SliderLabel(3)
-        threshold.setRange(0.001, 1.0)
-        threshold.setValue(0.01)
-        self.items.append({'name': 'min_sigma', 'string': 'Min Sigma', 'object': min_sigma})
-        self.items.append({'name': 'max_sigma', 'string': 'Max Sigma', 'object': max_sigma})
-        self.items.append({'name': 'num_sigma', 'string': 'Num Sigma', 'object': num_sigma})
-        self.items.append({'name': 'threshold', 'string': 'Threshold', 'object': threshold})
-        super().gui()
+    _blob_func = staticmethod(feature.blob_doh)
+    _method_name = 'DoH'
+    _default_threshold = 0.01
 
     def __call__(self, min_sigma=1.0, max_sigma=10.0, num_sigma=10, threshold=0.01, keepSourceWindow=False):
-        self.start(keepSourceWindow)
-        tif = self.tif.astype(np.float64)
-        all_blobs = []
-        if tif.ndim == 3:
-            result = np.zeros_like(tif, dtype=np.float64)
-            for i in range(len(tif)):
-                blobs = feature.blob_doh(tif[i], min_sigma=min_sigma,
-                                         max_sigma=max_sigma,
-                                         num_sigma=int(num_sigma),
-                                         threshold=threshold)
-                result[i] = _draw_blob_circles(tif[i], blobs)
-                for b in blobs:
-                    all_blobs.append([i, b[0], b[1], b[2]])
-        elif tif.ndim == 2:
-            blobs = feature.blob_doh(tif, min_sigma=min_sigma,
-                                     max_sigma=max_sigma,
-                                     num_sigma=int(num_sigma),
-                                     threshold=threshold)
-            result = _draw_blob_circles(tif, blobs)
-            for b in blobs:
-                all_blobs.append([0, b[0], b[1], b[2]])
-        self.newtif = result
-        self.newname = self.oldname + ' - DoH Blobs'
-        newWindow = self.end()
-        if newWindow is not None:
-            blob_array = np.array(all_blobs) if len(all_blobs) > 0 else np.empty((0, 4))
-            newWindow.metadata['blobs'] = blob_array
-        return newWindow
+        return self._detect(min_sigma, max_sigma, num_sigma, threshold, keepSourceWindow)
 
 blob_detection_doh = Blob_Detection_DoH()
 
@@ -218,6 +178,9 @@ class Peak_Local_Max(BaseProcess):
 
     Detect peaks in an image using local maximum detection.
     Peak coordinates are stored in window.metadata['peaks'].
+
+    Note: For single-particle tracking workflows with sub-pixel localization
+    and linking, use Analyze > SPT Analysis > SPT Control Panel instead.
 
     Parameters:
         min_distance (int): Minimum number of pixels separating peaks
@@ -288,6 +251,9 @@ class Template_Match(BaseProcess):
     Perform template matching using normalized cross-correlation.
     Uses another window as the template image.
 
+    Note: For single-particle tracking workflows with sub-pixel localization
+    and linking, use Analyze > SPT Analysis > SPT Control Panel instead.
+
     Parameters:
         template_window (Window): Window containing the template image
 
@@ -333,6 +299,9 @@ class Local_Maxima_Detect(BaseProcess):
 
     Detect local maxima using morphological analysis.
     Returns a binary image marking all local maxima positions.
+
+    Note: For single-particle tracking workflows with sub-pixel localization
+    and linking, use Analyze > SPT Analysis > SPT Control Panel instead.
 
     Returns:
         flika.window.Window (binary image of local maxima)

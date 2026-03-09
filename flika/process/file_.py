@@ -59,6 +59,11 @@ def save_file(filename=None):
         g.alert(msg)
         metadata_str = '{}'
     ext = os.path.splitext(filename)[1].lower()
+
+    # --- Registry-first save dispatch ---
+    # TIFF formats use the legacy path because it applies FIJI-compatible
+    # axis transposition and embeds metadata as a JSON description string.
+    # All other formats go through the I/O registry.
     if ext in ('.tif', '.tiff', '.stk', '.ome', ''):
         if len(A.shape) == 4 and not is_rgb:
             A = np.transpose(A, (0, 2, 1, 3))  # (T,X,Y,Z) -> (T,Y,X,Z) for FIJI compat
@@ -69,7 +74,6 @@ def save_file(filename=None):
         tifffile.imwrite(filename, A,
                          description=metadata_str)
     else:
-        # Try the format registry for non-TIFF formats
         from ..io.registry import registry as io_registry
         try:
             io_registry.write(str(filename), A, metadata)
@@ -272,9 +276,31 @@ def open_image_sequence(filename=None, from_gui=False):
     return new_window
 
 
+# Extensions that require legacy open_file handling (special processing beyond
+# what the registry provides).  The registry is tried first for all *other*
+# extensions.
+_LEGACY_OPEN_EXTENSIONS = {
+    # TIFF — needs axis remapping via open_tiff / _map_axes_to_canonical
+    '.tif', '.stk', '.tiff', '.ome',
+    # ND2 — uses nd2reader with progress reporting
+    '.nd2',
+    # Non-image types handled specially
+    '.py', '.whl',
+    # JPG/PNG — legacy path transposes RGB axes for flika convention
+    '.jpg', '.png',
+}
+
+
 def open_file(filename=None, from_gui=False):
     """ open_file(filename=None)
     Opens an image or movie file (.tif, .stk, .nd2) into a new_window.
+
+    The I/O registry (``flika.io.registry``) is tried first.  If the
+    registry does not have a handler for the file extension, the legacy
+    format-specific code is used as a fallback.  Certain formats (TIFF,
+    ND2, JPG/PNG) always use the legacy path because they require
+    additional axis remapping or metadata handling that the registry
+    handlers do not perform.
 
     Parameters:
         filename (str): Address of file to open. If no filename is provided, the last opened file is used.
@@ -298,34 +324,84 @@ def open_file(filename=None, from_gui=False):
     g.status_msg(f'Loading {os.path.basename(str(filename))}')
     t = time.time()
     metadata = dict()
-    # Check for directory-based formats (e.g., .ome.zarr)
-    if os.path.isdir(str(filename)):
-        from ..io.registry import registry as io_registry
-        handler = io_registry.get_handler(str(filename))
+
+    filename_str = str(filename)
+    ext = os.path.splitext(filename_str)[1].lower()
+
+    # --- Registry-first dispatch ---
+    # For directory-based formats or any extension not in the legacy set,
+    # try the I/O registry before falling back to legacy code.
+    from ..io.registry import registry as io_registry
+
+    use_registry = False
+    if os.path.isdir(filename_str):
+        # Directory-based formats (e.g. .ome.zarr) — always use registry
+        handler = io_registry.get_handler(filename_str)
         if handler is not None:
-            A, meta = handler.read(str(filename))
+            use_registry = True
+    elif ext not in _LEGACY_OPEN_EXTENSIONS:
+        # Not a legacy-only extension — try the registry
+        handler = io_registry.get_handler(filename_str)
+        if handler is not None:
+            use_registry = True
+
+    if use_registry:
+        try:
+            A, meta = handler.read(filename_str)
             metadata.update(meta)
-            append_recent_file(str(filename))
-            msg = f'{os.path.basename(str(filename))} successfully loaded ({time.time() - t} s)'
-            g.status_msg(msg)
-            g.settings['filename'] = str(filename)
-            command = f"open_file('{filename}')"
-            commands = [command]
-            from ..app.macro_recorder import macro_recorder
-            macro_recorder.record(command)
-            new_window = Window(A, os.path.basename(str(filename)), str(filename), commands, metadata)
-            return new_window
-    ext = os.path.splitext(str(filename))[1]
-    if ext in ['.tif', '.stk', '.tiff', '.ome']:
-        results = open_tiff(str(filename), metadata)
+        except Exception as exc:
+            logger.warning("Registry handler %s failed for %s: %s",
+                           type(handler).__name__, filename_str, exc)
+            # Fall through to legacy code
+            use_registry = False
+
+    if use_registry:
+        return _finish_open(filename_str, A, metadata, t)
+
+    # --- Legacy dispatch for formats needing special handling ---
+    result = _legacy_open(filename_str, ext, metadata)
+    if result is None:
+        # _legacy_open returns None when the file could not be opened or
+        # when it handled a non-image action (.py, .whl) with no window.
+        return None
+    if result == 'handled':
+        # .py / .whl — already handled, no window to create
+        return
+    A, metadata = result
+    return _finish_open(filename_str, A, metadata, t)
+
+
+def _finish_open(filename_str, A, metadata, start_time):
+    """Shared post-processing: update recent files, record macro, create Window."""
+    append_recent_file(filename_str)
+    msg = f'{os.path.basename(filename_str)} successfully loaded ({time.time() - start_time:.2f} s)'
+    g.status_msg(msg)
+    g.settings['filename'] = filename_str
+    command = f"open_file('{filename_str}')"
+    commands = [command]
+    from ..app.macro_recorder import macro_recorder
+    macro_recorder.record(command)
+    new_window = Window(A, os.path.basename(filename_str), filename_str, commands, metadata)
+    return new_window
+
+
+def _legacy_open(filename_str, ext, metadata):
+    """Legacy format-specific open logic.
+
+    Returns one of:
+      - ``(A, metadata)`` tuple on success
+      - ``'handled'`` for non-image actions (.py, .whl)
+      - ``None`` on failure
+    """
+    if ext in ('.tif', '.stk', '.tiff', '.ome'):
+        results = open_tiff(filename_str, metadata)
         if results is None:
             return None
-        else:
-            A, metadata = results
+        return results[0], results[1]
+
     elif ext == '.nd2':
         import nd2reader
-        nd2 = nd2reader.ND2Reader(str(filename))
-        axes = nd2.axes
+        nd2 = nd2reader.ND2Reader(filename_str)
         mx = nd2.metadata['width']
         my = nd2.metadata['height']
         mt = nd2.metadata['total_images_per_channel']
@@ -338,56 +414,50 @@ def open_file(filename=None, from_gui=False):
                 g.status_msg(f'Loading file {percent}%')
                 QtWidgets.QApplication.processEvents()
         metadata = nd2.metadata
+        return A, metadata
+
     elif ext == '.py':
         from ..app.script_editor import ScriptEditor
-        ScriptEditor.importScript(filename)
-        return
+        ScriptEditor.importScript(filename_str)
+        return 'handled'
+
     elif ext == '.whl':
-        # first, remove trailing (1) or (2)
-        newfilename = re.sub(r' \([^)]*\)', '', filename)
+        newfilename = re.sub(r' \([^)]*\)', '', filename_str)
         try:
-            os.rename(filename, newfilename)
+            os.rename(filename_str, newfilename)
         except FileExistsError:
             pass
-        filename = newfilename
-        result = subprocess.call([sys.executable, '-m', 'pip', 'install', f'{filename}'])
+        filename_str = newfilename
+        result = subprocess.call([sys.executable, '-m', 'pip', 'install', f'{filename_str}'])
         if result == 0:
-            g.alert(f'Successfully installed {filename}')
+            g.alert(f'Successfully installed {filename_str}')
         else:
-            g.alert(f'Install of {filename} failed')
-        return
-    elif ext == '.jpg' or ext == '.png':
+            g.alert(f'Install of {filename_str} failed')
+        return 'handled'
+
+    elif ext in ('.jpg', '.png'):
         import skimage.io
-        A = skimage.io.imread(filename)
+        A = skimage.io.imread(filename_str)
         if len(A.shape) == 3:
             perm = get_permutation_tuple(['y', 'x', 'c'], ['x', 'y', 'c'])
             A = np.transpose(A, perm)
             metadata['is_rgb'] = True
+        return A, metadata
 
     else:
-        # Try the format registry as a fallback
+        # Unknown extension with no registry handler — last resort, try
+        # the registry anyway (it may have been registered after startup).
         from ..io.registry import registry as io_registry
         try:
-            A, meta = io_registry.read(str(filename))
+            A, meta = io_registry.read(filename_str)
             metadata.update(meta)
+            return A, metadata
         except (ValueError, Exception):
-            msg = f"Could not open.  Filetype for '{filename}' not recognized"
+            msg = f"Could not open.  Filetype for '{filename_str}' not recognized"
             g.alert(msg)
-            if filename in g.settings['recent_files']:
-                g.settings['recent_files'].remove(filename)
-            return
-
-    append_recent_file(str(filename))  # make first in recent file menu
-    msg = f'{os.path.basename(str(filename))} successfully loaded ({time.time() - t} s)'
-    g.status_msg(msg)
-    g.settings['filename'] = str(filename)
-    command = f"open_file('{filename}')"
-    commands = [command]
-    # Record for macro playback
-    from ..app.macro_recorder import macro_recorder
-    macro_recorder.record(command)
-    new_window = Window(A, os.path.basename(str(filename)), filename, commands, metadata)
-    return new_window
+            if filename_str in g.settings['recent_files']:
+                g.settings['recent_files'].remove(filename_str)
+            return None
 
 def _map_axes_to_canonical(axes, shape):
     """Map tifffile axes labels to flika's canonical axis order.

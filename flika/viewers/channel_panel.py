@@ -26,6 +26,7 @@ from qtpy import QtCore, QtWidgets
 from qtpy.QtCore import Signal
 
 from .channel_compositor import ChannelCompositor, COLORMAPS, AUTO_COLORMAP_ORDER
+from ..utils.singleton import DockSingleton
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +242,7 @@ class ChannelRowWidget(QtWidgets.QWidget):
 # ChannelPanel
 # ---------------------------------------------------------------------------
 
-class ChannelPanel(QtWidgets.QDockWidget):
+class ChannelPanel(DockSingleton):
     """Dockable panel that provides the UI for the :class:`ChannelCompositor`.
 
     This is implemented as a singleton so that only one panel exists at a time.
@@ -256,30 +257,6 @@ class ChannelPanel(QtWidgets.QDockWidget):
     3. **Export / Close** — buttons to export the current composite as an RGB
        window or to tear down the compositor.
     """
-
-    _instance = None
-
-    @classmethod
-    def instance(cls, parent=None):
-        """Return the singleton :class:`ChannelPanel`, creating it if needed.
-
-        Parameters
-        ----------
-        parent : QWidget or None
-            Parent widget (typically ``g.m``, the main application window).
-        """
-        if cls._instance is None or not cls._is_alive(cls._instance):
-            cls._instance = cls(parent)
-        return cls._instance
-
-    @staticmethod
-    def _is_alive(widget):
-        """Check whether a Qt widget's underlying C++ object still exists."""
-        try:
-            widget.objectName()
-            return True
-        except RuntimeError:
-            return False
 
     # ----- construction -----
 
@@ -544,10 +521,7 @@ class ChannelPanel(QtWidgets.QDockWidget):
 
         logger.debug('ChannelPanel cleaned up')
 
-    def closeEvent(self, event):
-        """Override close event to perform cleanup before hiding."""
-        self.cleanup()
-        super().closeEvent(event)
+    # closeEvent is handled by DockSingleton (calls cleanup + clears _instance)
 
 
 logger.debug("Completed 'reading viewers/channel_panel.py'")

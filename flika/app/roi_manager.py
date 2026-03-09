@@ -3,26 +3,18 @@
 from qtpy import QtCore, QtGui, QtWidgets
 import numpy as np
 from .. import global_vars as g
+from ..utils.singleton import DockSingleton
 
 
-class ROIManager(QtWidgets.QDockWidget):
+class ROIManager(DockSingleton):
     """Dockable panel that lists all ROIs in the active window.
 
     Provides bulk operations (plot all, unplot all, delete selected, export CSV)
     and per-ROI editing (rename, change color).
     """
 
-    _instance = None  # singleton
-
-    @classmethod
-    def instance(cls, parent=None):
-        if cls._instance is None or cls._instance._destroyed:
-            cls._instance = cls(parent)
-        return cls._instance
-
     def __init__(self, parent=None):
         super().__init__("ROI Manager", parent)
-        self._destroyed = False
         self.setObjectName("ROIManagerDock")
         self.setAllowedAreas(QtCore.Qt.AllDockWidgetAreas)
 
@@ -210,7 +202,8 @@ class ROIManager(QtWidgets.QDockWidget):
             writer.writerows(rows)
         g.m.statusBar().showMessage(f"Exported {len(rows)} ROI stats to {filename}")
 
-    def closeEvent(self, event):
+    def cleanup(self):
+        """Disconnect window signals before closing."""
         self._disconnect_window()
-        self._destroyed = True
-        event.accept()
+
+    # closeEvent is handled by DockSingleton (calls cleanup + clears _instance)

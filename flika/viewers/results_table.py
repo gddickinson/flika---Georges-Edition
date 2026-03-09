@@ -11,6 +11,7 @@ from qtpy import QtCore, QtWidgets, QtGui
 from qtpy.QtCore import Qt, Signal
 
 from ..logger import logger
+from ..utils.singleton import DockSingleton
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +90,7 @@ class ParticleTableModel(QtCore.QAbstractTableModel):
 # Results table dock widget
 # ---------------------------------------------------------------------------
 
-class ResultsTableWidget(QtWidgets.QDockWidget):
+class ResultsTableWidget(DockSingleton):
     """Singleton dockable results table for SPT localization data.
 
     Features:
@@ -100,15 +101,7 @@ class ResultsTableWidget(QtWidgets.QDockWidget):
     - Context menu: copy rows, jump to frame
     """
 
-    _instance = None
-
     sigRowSelected = Signal(int, float, float)  # frame, x, y
-
-    @classmethod
-    def instance(cls, parent=None):
-        if cls._instance is None or not cls._instance.isVisible():
-            cls._instance = cls(parent)
-        return cls._instance
 
     def __init__(self, parent=None):
         super().__init__("SPT Results", parent)
@@ -419,6 +412,4 @@ class ResultsTableWidget(QtWidgets.QDockWidget):
     # Qt overrides
     # ------------------------------------------------------------------
 
-    def closeEvent(self, event):
-        ResultsTableWidget._instance = None
-        super().closeEvent(event)
+    # closeEvent is handled by DockSingleton (calls cleanup + clears _instance)

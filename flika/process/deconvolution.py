@@ -15,43 +15,12 @@ from ..utils.ndim import per_plane
 
 __all__ = ['richardson_lucy', 'wiener_deconvolution', 'generate_psf']
 
-
-def _gaussian_psf(size, sigma):
-    """Generate a 2D Gaussian PSF."""
-    x = np.arange(size) - size // 2
-    y = x[:, None]
-    x = x[None, :]
-    psf = np.exp(-(x**2 + y**2) / (2 * sigma**2))
-    return psf / psf.sum()
+from ..optics.psf import gaussian_psf as _gaussian_psf, airy_psf as _airy_psf
 
 
-def _airy_psf(size, radius):
-    """Generate a 2D Airy disk PSF approximation."""
-    from scipy.special import j1
-    x = np.arange(size) - size // 2
-    y = x[:, None]
-    x = x[None, :]
-    r = np.sqrt(x**2 + y**2) + 1e-10
-    scale = np.pi * r / radius
-    psf = (2 * j1(scale) / scale) ** 2
-    psf[size // 2, size // 2] = 1.0
-    return psf / psf.sum()
-
-
-@per_plane
+@per_plane(expects_2d=True)
 def _richardson_lucy_impl(image, psf, iterations):
-    """Richardson-Lucy deconvolution (2D or 3D stack)."""
-    if image.ndim == 2:
-        return _rl_2d(image, psf, iterations)
-    # 3D: apply per-frame
-    out = np.empty_like(image)
-    for t in range(image.shape[0]):
-        out[t] = _rl_2d(image[t], psf, iterations)
-    return out
-
-
-def _rl_2d(image, psf, iterations):
-    """Richardson-Lucy on a single 2D plane."""
+    """Richardson-Lucy deconvolution on a single 2D plane."""
     from scipy.signal import fftconvolve
     psf_mirror = psf[::-1, ::-1]
     estimate = np.full_like(image, image.mean(), dtype=np.float64)
@@ -64,18 +33,8 @@ def _rl_2d(image, psf, iterations):
     return estimate
 
 
-@per_plane
+@per_plane(expects_2d=True)
 def _wiener_impl(image, psf, noise_var):
-    """Wiener deconvolution (2D or 3D stack)."""
-    if image.ndim == 2:
-        return _wiener_2d(image, psf, noise_var)
-    out = np.empty_like(image)
-    for t in range(image.shape[0]):
-        out[t] = _wiener_2d(image[t], psf, noise_var)
-    return out
-
-
-def _wiener_2d(image, psf, noise_var):
     """Wiener deconvolution on a single 2D plane."""
     img_fft = np.fft.fft2(image)
     psf_padded = np.zeros_like(image)

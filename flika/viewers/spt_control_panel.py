@@ -35,35 +35,11 @@ from ..logger import logger
 # Helper utilities
 # ---------------------------------------------------------------------------
 
-def _make_double_spin(value, lo, hi, decimals=3, suffix='', step=None):
-    """Create a QDoubleSpinBox with sensible defaults."""
-    sb = QtWidgets.QDoubleSpinBox()
-    sb.setRange(lo, hi)
-    sb.setDecimals(decimals)
-    sb.setValue(value)
-    if suffix:
-        sb.setSuffix(suffix)
-    if step is not None:
-        sb.setSingleStep(step)
-    return sb
-
-
-def _make_int_spin(value, lo, hi, suffix=''):
-    """Create a QSpinBox with sensible defaults."""
-    sb = QtWidgets.QSpinBox()
-    sb.setRange(lo, hi)
-    sb.setValue(value)
-    if suffix:
-        sb.setSuffix(suffix)
-    return sb
-
-
-def _make_hline():
-    """Create a horizontal line separator."""
-    line = QtWidgets.QFrame()
-    line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-    line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-    return line
+from ..utils.ui_components import (
+    make_double_spin as _make_double_spin,
+    make_int_spin as _make_int_spin,
+    make_hline as _make_hline,
+)
 
 
 def _render_histogram(x, y, out_w, out_h, scale):

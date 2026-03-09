@@ -14,6 +14,7 @@ import pyqtgraph as pg
 from .. import global_vars as g
 from ..logger import logger
 from .grid_overlay import GridOverlay, TextAnnotation, _make_pen, _GRID_COLORS
+from ..utils.singleton import DockSingleton
 
 
 # ---------------------------------------------------------------------------
@@ -280,16 +281,8 @@ def _draw_roi_boundary(rgb_frame, mask_rows, mask_cols, color, line_width):
 # Overlay Manager Panel
 # ---------------------------------------------------------------------------
 
-class OverlayManagerPanel(QtWidgets.QDockWidget):
+class OverlayManagerPanel(DockSingleton):
     """Dockable panel for managing all overlays on the current window."""
-
-    _instance = None
-
-    @classmethod
-    def instance(cls, parent=None):
-        if cls._instance is None or not cls._instance.isVisible():
-            cls._instance = cls(parent)
-        return cls._instance
 
     def __init__(self, parent=None):
         super().__init__('Overlay Manager', parent)
@@ -680,6 +673,4 @@ class OverlayManagerPanel(QtWidgets.QDockWidget):
             create_new_window=self._bake_new_window.isChecked(),
         )
 
-    def closeEvent(self, event):
-        OverlayManagerPanel._instance = None
-        super().closeEvent(event)
+    # closeEvent is handled by DockSingleton (calls cleanup + clears _instance)
