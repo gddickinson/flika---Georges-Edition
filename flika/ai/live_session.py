@@ -10,11 +10,48 @@ from __future__ import annotations
 import datetime
 import io
 import os
+import re
 import sys
 import traceback
 from contextlib import redirect_stdout, redirect_stderr
 from qtpy import QtWidgets, QtCore, QtGui
 from ..logger import logger
+
+
+# ---------------------------------------------------------------------------
+# Code safety checking for AI-generated code
+# ---------------------------------------------------------------------------
+
+_DANGEROUS_PATTERNS = [
+    (r'\bsubprocess\b', "subprocess module usage"),
+    (r'\bos\.system\b', "os.system() call"),
+    (r'\bshutil\.rmtree\b', "shutil.rmtree() call"),
+    (r'\b__import__\b', "dynamic __import__() call"),
+    (r'\beval\s*\(', "eval() call"),
+    (r'\bexec\s*\(', "exec() call"),
+    (r'\bopen\s*\([^)]*["\']w["\']', "file write via open()"),
+    (r'\brmtree\b', "rmtree call"),
+    (r'rm\s+-rf\b', "rm -rf command"),
+]
+
+# Session-level set of patterns the user has approved
+_approved_patterns: set = set()
+
+
+def _check_code_safety(code: str) -> tuple:
+    """Check AI-generated code for dangerous patterns.
+
+    Returns
+    -------
+    tuple of (is_safe: bool, warnings: list[str])
+        is_safe is False if any unapproved dangerous pattern is found.
+    """
+    warnings = []
+    for pattern, description in _DANGEROUS_PATTERNS:
+        if re.search(pattern, code):
+            if pattern not in _approved_patterns:
+                warnings.append(description)
+    return (len(warnings) == 0, warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +378,22 @@ def _execute_tool_call(tool_name, tool_input):
 
 def _tool_execute_code(code, explanation):
     """Execute Python code in flika's namespace and log the action."""
+    # Safety check: flag dangerous patterns in AI-generated code
+    is_safe, warnings = _check_code_safety(code)
+    if not is_safe:
+        warning_text = "\n".join(f"  - {w}" for w in warnings)
+        msg = (
+            f"CODE BLOCKED — potentially dangerous patterns detected:\n"
+            f"{warning_text}\n\n"
+            f"Please ask the user to confirm they want to run this code. "
+            f"The user can approve these patterns for this session via the "
+            f"Live Session dialog."
+        )
+        _action_log.add("execute_code", code=code,
+                        explanation=explanation,
+                        error=f"Blocked: {', '.join(warnings)}")
+        return msg
+
     ns = _get_namespace()
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
@@ -832,6 +885,26 @@ class LiveSessionDialog(QtWidgets.QDialog):
             self._update_status(f"Executing: {tool_name}...")
             QtWidgets.QApplication.processEvents()
 
+            # Safety gate: if code was blocked, offer user approval
+            if tool_name == "execute_code" and code:
+                is_safe, warnings = _check_code_safety(code)
+                if not is_safe:
+                    warning_text = "\n".join(f"  - {w}" for w in warnings)
+                    reply = QtWidgets.QMessageBox.warning(
+                        self, "Potentially Dangerous Code",
+                        f"The AI wants to run code containing:\n\n"
+                        f"{warning_text}\n\n"
+                        f"Code:\n{code[:500]}\n\n"
+                        f"Allow this code to run?",
+                        QtWidgets.QMessageBox.StandardButton.Yes |
+                        QtWidgets.QMessageBox.StandardButton.No,
+                        QtWidgets.QMessageBox.StandardButton.No)
+                    if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                        # Approve these patterns for the rest of the session
+                        for pat, _desc in _DANGEROUS_PATTERNS:
+                            if re.search(pat, code):
+                                _approved_patterns.add(pat)
+
             # Execute the tool
             result = _execute_tool_call(tool_name, tool_input)
 
@@ -1019,6 +1092,7 @@ class LiveSessionDialog(QtWidgets.QDialog):
         self._chat.clear()
         self._pending_tool_calls = []
         _action_log.clear()
+        _approved_patterns.clear()
         self._update_context_label()
         self._update_status()
         self._set_busy(False)

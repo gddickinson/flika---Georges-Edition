@@ -294,39 +294,42 @@ class PluginGeneratorDialog(QtWidgets.QDialog):
     def _load_plugin_live(self, name, filepath):
         """Dynamically load a saved plugin into the current session."""
         try:
-            plugin_dir = os.path.dirname(filepath)
-            parent_dir = os.path.dirname(plugin_dir)
-
-            # Ensure plugin directory is on sys.path
-            if parent_dir not in sys.path:
-                sys.path.insert(0, parent_dir)
-
-            # Import the module
-            module_name = name
-            if module_name in sys.modules:
-                # Reload if already imported
-                mod = importlib.reload(sys.modules[module_name])
-            else:
-                mod = importlib.import_module(module_name)
-
-            # Look for BaseProcess subclass instances and add to Plugins menu
-            from ..utils.BaseProcess import BaseProcess, BaseProcess_noPriorWindow
+            from ..app.plugin_manager import get_plugin_directory
             from .. import global_vars as g
 
+            plugin_dir = get_plugin_directory()  # ensures sys.path is set up
+
+            # Import using the same path the plugin manager uses:
+            # plugins.<name>.<name>  (relative to ~/.FLIKA/ on sys.path)
+            full_module = f"plugins.{name}.{name}"
+
+            # Remove stale entries so reimport works
+            for key in list(sys.modules.keys()):
+                if key.startswith(f"plugins.{name}"):
+                    del sys.modules[key]
+
+            mod = importlib.import_module(full_module)
+
+            # Find BaseProcess instances by checking for gui/start methods
+            # (more robust than isinstance which can fail across import paths)
             loaded_any = False
             for attr_name in dir(mod):
-                obj = getattr(mod, attr_name)
-                if isinstance(obj, (BaseProcess, BaseProcess_noPriorWindow)):
-                    # Add to Plugins menu
+                obj = getattr(mod, attr_name, None)
+                if (obj is not None and
+                        hasattr(obj, 'gui') and callable(obj.gui) and
+                        hasattr(obj, 'start') and
+                        not isinstance(obj, type)):
+                    # This looks like a BaseProcess instance
                     if hasattr(g, 'm') and g.m is not None:
-                        plugin_menu = g.m.pluginMenu
                         display_name = name.replace("_", " ").title()
                         action = QtWidgets.QAction(
                             display_name, g.m,
                             triggered=obj.gui)
-                        plugin_menu.addAction(action)
+                        g.m.pluginMenu.addAction(action)
                         loaded_any = True
-                        logger.info("Loaded AI plugin '%s' into Plugins menu", display_name)
+                        logger.info(
+                            "Loaded AI plugin '%s' into Plugins menu",
+                            display_name)
 
             if loaded_any:
                 self._update_status(
@@ -409,10 +412,12 @@ class PluginGeneratorDialog(QtWidgets.QDialog):
             subprocess.run(['git', 'add', '.'], cwd=plugin_dir,
                            capture_output=True, check=True)
 
-            # Commit
+            # Commit — sanitize plugin name to prevent injection
+            import re as _re
+            safe_name = _re.sub(r'[^A-Za-z0-9_ -]', '', name)
             subprocess.run(
                 ['git', 'commit', '-m',
-                 f'Add AI-generated plugin: {name}'],
+                 f'Add AI-generated plugin: {safe_name}'],
                 cwd=plugin_dir, capture_output=True, check=True)
 
             # Add remote if needed

@@ -1001,6 +1001,10 @@ class PluginManager(QtWidgets.QMainWindow):
                     "Please remove it to install this plugin!".format(plugin.directory))
             return
 
+        # SECURITY NOTE: Plugin downloads lack checksum/signature verification.
+        # A server-side component (e.g., SHA-256 hashes in the plugin index)
+        # would be needed to verify download integrity. Until then, plugins
+        # are trusted based on the repository URL alone.
         try:
             data = urlopen(plugin.url).read()
         except Exception:

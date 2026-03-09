@@ -81,9 +81,9 @@ class BatchProcessor:
             macro_code = f.read()
 
         def macro_pipeline(filepath, output_dir):
-            code = macro_code.replace('CURRENT_FILE', filepath)
+            code = macro_code.replace('CURRENT_FILE', repr(filepath)[1:-1])
             if output_dir:
-                code = code.replace('OUTPUT_DIR', output_dir)
+                code = code.replace('OUTPUT_DIR', repr(output_dir)[1:-1])
             exec(code, {'__builtins__': __builtins__})
 
         self.pipeline_fn = macro_pipeline

@@ -1564,6 +1564,20 @@ class SPTControlPanel(QtWidgets.QDockWidget):
         if not path:
             return
 
+        # SECURITY WARNING: pickle.load() can execute arbitrary code.
+        # Only load pickle files from trusted sources.
+        reply = QtWidgets.QMessageBox.warning(
+            self, "Security Warning",
+            f"Loading pickle files can execute arbitrary code.\n\n"
+            f"File: {path}\n\n"
+            f"Only load pickle files from sources you trust.\n"
+            f"Continue?",
+            QtWidgets.QMessageBox.StandardButton.Yes |
+            QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No)
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+
         try:
             import pickle
             with open(path, 'rb') as f:

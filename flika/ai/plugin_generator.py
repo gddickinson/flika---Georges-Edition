@@ -195,15 +195,23 @@ class PluginGenerator:
         except Exception:
             pass
 
-        # Find the instance name (lowercase of class)
+        # Find the module-level instance name (e.g., "test_plugin = TestPlugin()")
         instance_name = None
         try:
             tree = ast.parse(code)
-            for node in ast.walk(tree):
+            # Only look at top-level statements, not nested assignments
+            for node in tree.body:
                 if isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            instance_name = target.id
+                    # Check if the value is a call to the class we found
+                    if (isinstance(node.value, ast.Call) and
+                            isinstance(node.value.func, ast.Name) and
+                            node.value.func.id == class_name):
+                        for target in node.targets:
+                            if isinstance(target, ast.Name):
+                                instance_name = target.id
+                                break
+                    if instance_name:
+                        break
         except Exception:
             pass
         if not instance_name:

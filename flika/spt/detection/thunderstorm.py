@@ -458,8 +458,21 @@ def compute_threshold_expression(image, filtered_image, expression,
         'F1': f1,
     }
 
+    # Try ast.literal_eval first for simple numeric expressions (safest)
+    import ast
     try:
-        threshold = eval(expr, {"__builtins__": {}}, namespace)
+        threshold = ast.literal_eval(expr)
+        return float(threshold)
+    except (ValueError, SyntaxError):
+        pass
+
+    # Restricted eval: only allow known math functions on image data.
+    # No callables beyond the explicit allowlist.
+    safe_namespace = {k: v for k, v in namespace.items()
+                      if k in ('std', 'mean', 'median', 'max', 'min',
+                               'abs', 'sqrt', 'I1', 'F1')}
+    try:
+        threshold = eval(expr, {"__builtins__": {}}, safe_namespace)
         return float(threshold)
     except Exception as e:
         logger.warning("Invalid threshold expression '%s': %s. "
