@@ -350,6 +350,8 @@ class FlikaApplication(QtWidgets.QMainWindow):
 
         aiMenu = self.menuBar().addMenu('AI')
         claudeMenu = aiMenu.addMenu("Claude")
+        claudeMenu.addAction("Live Session", self._ai_live_session)
+        claudeMenu.addSeparator()
         claudeMenu.addAction("Generate Script", self._ai_generate_script)
         claudeMenu.addAction("Generate Plugin", self._ai_generate_plugin)
         aiMenu.addAction("AI Denoiser", self._ai_denoise)
@@ -409,6 +411,10 @@ class FlikaApplication(QtWidgets.QMainWindow):
         else:
             self.addDockWidget(QtCore.Qt.RightDockWidgetArea, mgr)
             mgr.show()
+
+    def _ai_live_session(self):
+        from ..ai.live_session import _show_live_session
+        _show_live_session()
 
     def _ai_generate_script(self):
         from ..ai.assistant import _show_generate_script_dialog

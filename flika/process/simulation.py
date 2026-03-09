@@ -4,6 +4,8 @@ import numpy as np
 from ..utils.BaseProcess import BaseProcess_noPriorWindow
 from .. import global_vars as g
 
+__all__ = ['simulate']
+
 
 class Simulate(BaseProcess_noPriorWindow):
     """Open the Microscopy Simulation dialog or run a preset."""

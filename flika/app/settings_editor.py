@@ -216,9 +216,26 @@ class SettingsEditor(BaseDialog):
         items.append({'name': 'pixel_size', 'string': 'Default Pixel Size', 'object': pixel_size})
         items.append({'name': 'frame_interval', 'string': 'Default Frame Interval', 'object': frame_interval})
         items.append({'name': 'auto_export_provenance', 'string': 'Auto-export provenance on save', 'object': auto_provenance})
+        ai_model = QtWidgets.QComboBox()
+        for m in ['claude-sonnet-4-20250514', 'claude-opus-4-20250514',
+                   'claude-haiku-4-5-20251001']:
+            ai_model.addItem(m)
+        current_model = g.settings.get('ai_model', 'claude-sonnet-4-20250514')
+        idx_m = ai_model.findText(current_model)
+        if idx_m >= 0:
+            ai_model.setCurrentIndex(idx_m)
+
+        source_url = QtWidgets.QLineEdit()
+        source_url.setPlaceholderText("https://github.com/...")
+        source_url.setText(g.settings.get(
+            'flika_source_url',
+            'https://github.com/gddickinson/flika---Georges-Edition'))
+
         items.append({'name': 'anthropic_api_key', 'string': 'Anthropic API Key (for AI features)', 'object': api_key_edit})
         items.append({'name': 'api_key_storage', 'string': '', 'object': api_key_storage_label})
         items.append({'name': 'delete_api_key', 'string': '', 'object': delete_key_btn})
+        items.append({'name': 'ai_model', 'string': 'AI Model', 'object': ai_model})
+        items.append({'name': 'flika_source_url', 'string': 'Flika Source Code URL', 'object': source_url})
 
         def update():
             g.settings['internal_data_type'] = str(dataDrop.currentText())
@@ -247,6 +264,8 @@ class SettingsEditor(BaseDialog):
             elif not key_text:
                 # User cleared the field — remove the key
                 delete_api_key()
+            g.settings['ai_model'] = str(ai_model.currentText())
+            g.settings['flika_source_url'] = source_url.text().strip()
 
 
         super(SettingsEditor, self).__init__(items, 'flika settings', None)

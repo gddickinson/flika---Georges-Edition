@@ -17,8 +17,12 @@ def getnamespace():
     d = {}
     for name, mod in getmembers(process):
         if ismodule(mod):
-            for func in mod.__all__:
-                d[func] = mod.__dict__[func]
+            exports = getattr(mod, '__all__', None)
+            if exports is None:
+                continue
+            for func in exports:
+                if func in mod.__dict__:
+                    d[func] = mod.__dict__[func]
     d['g'] = g
     d['np'] = np
     d['scipy'] = scipy

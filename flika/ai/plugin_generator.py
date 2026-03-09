@@ -15,6 +15,10 @@ from ..logger import logger
 _SYSTEM_PROMPT = """\
 You are an expert Python developer who writes *flika* plugins.
 
+Source code: {source_url}
+Plugin repository: https://github.com/gddickinson/flika_plugins
+
+# Plugin Architecture
 A flika plugin is a Python module containing a subclass of
 ``flika.utils.BaseProcess.BaseProcess``.  The subclass must:
 
@@ -24,33 +28,106 @@ A flika plugin is a Python module containing a subclass of
    ``self.start(keepSourceWindow)``, processes ``self.tif``, sets
    ``self.newtif`` and ``self.newname``, and returns ``self.end()``.
 
-Example skeleton:
+# Example Plugin Skeleton
 
-    from flika.utils.BaseProcess import BaseProcess, SliderLabel, CheckBox
+    from flika.utils.BaseProcess import BaseProcess, SliderLabel, CheckBox, ComboBox
     from flika import global_vars as g
+    import numpy as np
 
-    class MyProcess(BaseProcess):
+    class MyFilter(BaseProcess):
         def __init__(self):
             super().__init__()
+
         def gui(self):
             self.gui_reset()
-            # add items …
+            # Convenience methods (preferred):
+            self.add_slider('sigma', 'Sigma', 2.0, 0.1, 20.0, decimals=2)
+            self.add_checkbox('keep', 'Keep Source', checked=False)
+            self.add_combo('method', 'Method', ['Option A', 'Option B'])
+            # Or manual approach:
+            # slider = SliderLabel(2); slider.setRange(0.1, 20); slider.setValue(2.0)
+            # self.items.append({{'name': 'sigma', 'string': 'Sigma', 'object': slider}})
             super().gui()
-        def __call__(self, keepSourceWindow=False):
+
+        def __call__(self, sigma=2.0, keep=False, method='Option A',
+                     keepSourceWindow=False):
             self.start(keepSourceWindow)
-            self.newtif = self.tif  # processing here
-            self.newname = self.oldname + ' - MyProcess'
+            # self.tif is the numpy array from the active window
+            # Process: (images are 2D=YX, 3D=TYX, 4D=TYXZ)
+            from scipy.ndimage import gaussian_filter
+            if self.tif.ndim == 2:
+                self.newtif = gaussian_filter(self.tif, sigma)
+            else:
+                self.newtif = np.zeros_like(self.tif)
+                for i in range(len(self.tif)):
+                    self.newtif[i] = gaussian_filter(self.tif[i], sigma)
+            self.newname = self.oldname + ' - MyFilter'
             return self.end()
-    my_process = MyProcess()
+
+    my_filter = MyFilter()
+
+# For plugins that don't need an existing window:
+    from flika.utils.BaseProcess import BaseProcess_noPriorWindow
+
+# Key flika APIs available to plugins:
+## Global state
+  from flika import global_vars as g
+  g.win           # current Window
+  g.win.image     # numpy array
+  g.m             # main FlikaApplication
+  g.m.windows     # list of all Windows
+
+## Process modules (all callable objects)
+  from flika.process.filters import gaussian_blur, median_filter, ...
+  from flika.process.binary import threshold, binary_erosion, ...
+  from flika.process.math_ import subtract, multiply, normalize, ...
+  from flika.process.stacks import zproject, trim, resize, ...
+  from flika.process.segmentation import connected_components, ...
+  from flika.process.detection import blob_detection_log, peak_local_max, ...
+  from flika.process.deconvolution import richardson_lucy, generate_psf
+  from flika.process.color import split_channels, grayscale, ...
+
+## ROIs
+  from flika.roi import makeROI
+  g.win.rois  # list of ROIs in the current window
+  roi.getTrace()  # intensity trace as 1D array
+
+## Window creation
+  from flika.window import Window
+  w = Window(numpy_array, name='My Result')
+
+## I/O
+  from flika.process.file_ import open_file, save_file
+
+# Dimensions: 2D=(Y,X), 3D=(T,Y,X), 4D=(T,Y,X,Z)
 
 Return ONLY valid Python code (no markdown fences).
 """
 
 
+def _get_model():
+    """Return the AI model from settings, with fallback."""
+    try:
+        from .. import global_vars as g
+        return g.settings['ai_model'] or 'claude-sonnet-4-20250514'
+    except Exception:
+        return 'claude-sonnet-4-20250514'
+
+
+def _get_source_url():
+    """Return the flika source URL from settings."""
+    try:
+        from .. import global_vars as g
+        return (g.settings['flika_source_url']
+                or 'https://github.com/gddickinson/flika---Georges-Edition')
+    except Exception:
+        return 'https://github.com/gddickinson/flika---Georges-Edition'
+
+
 class PluginGenerator:
     """Generate a flika plugin from a description."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         try:
             import anthropic
         except ImportError:
@@ -67,16 +144,17 @@ class PluginGenerator:
                 "or enter your key in Edit > Settings."
             )
         self._client = anthropic.Anthropic(api_key=api_key)
-        self._model = model
+        self._model = model or _get_model()
 
     def generate_plugin(self, description: str, name: str = "generated_plugin") -> str:
         """Generate plugin code and validate it with ast.parse."""
         logger.info("AI plugin generator: creating %r from %r", name, description)
         prompt = f"Create a flika plugin named '{name}' that: {description}"
+        system = _SYSTEM_PROMPT.format(source_url=_get_source_url())
         message = self._client.messages.create(
             model=self._model,
             max_tokens=4096,
-            system=_SYSTEM_PROMPT,
+            system=system,
             messages=[{"role": "user", "content": prompt}],
         )
         code = message.content[0].text
@@ -89,56 +167,94 @@ class PluginGenerator:
 
         return code
 
-    def save_plugin(self, code: str, name: str) -> str:
-        """Save generated plugin to ``~/.FLIKA/plugins/<name>/``."""
+    def save_plugin(self, code: str, name: str, description: str = "") -> str:
+        """Save generated plugin to ``~/.FLIKA/plugins/<name>/``.
+
+        Creates all files needed for proper Plugin Manager integration:
+        ``<name>.py``, ``__init__.py``, ``info.xml``, and ``about.html``.
+        """
         from os.path import expanduser
+        import datetime
+
         plugin_dir = os.path.join(expanduser("~"), '.FLIKA', 'plugins', name)
         os.makedirs(plugin_dir, exist_ok=True)
+
+        # Main plugin code
         filepath = os.path.join(plugin_dir, f'{name}.py')
         with open(filepath, 'w') as f:
             f.write(code)
-        logger.info("Plugin saved to %s", filepath)
+
+        # Find the class name from the code
+        class_name = name
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    class_name = node.name
+                    break
+        except Exception:
+            pass
+
+        # Find the instance name (lowercase of class)
+        instance_name = None
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            instance_name = target.id
+        except Exception:
+            pass
+        if not instance_name:
+            instance_name = name
+
+        # __init__.py
+        init_path = os.path.join(plugin_dir, '__init__.py')
+        if not os.path.exists(init_path):
+            with open(init_path, 'w') as f:
+                f.write(f'from .{name} import *\n')
+
+        # info.xml
+        display_name = name.replace("_", " ").title()
+        today = datetime.date.today().strftime("%m/%d/%Y")
+        info_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<plugin name="{display_name}">
+    <directory>{name}</directory>
+    <version>1.0.0</version>
+    <author>AI Generated</author>
+    <url></url>
+    <documentation></documentation>
+    <date>{today}</date>
+    <menu_layout>
+        <action name="{display_name}" location="{name}" function="{instance_name}.gui">{display_name}</action>
+    </menu_layout>
+</plugin>
+'''
+        info_path = os.path.join(plugin_dir, 'info.xml')
+        with open(info_path, 'w') as f:
+            f.write(info_xml)
+
+        # about.html
+        about_html = f'''<html>
+<body>
+<h2>{display_name}</h2>
+<p>AI-generated flika plugin.</p>
+<p>{description or "No description provided."}</p>
+<p><i>Generated by flika AI Plugin Generator</i></p>
+</body>
+</html>
+'''
+        about_path = os.path.join(plugin_dir, 'about.html')
+        with open(about_path, 'w') as f:
+            f.write(about_html)
+
+        logger.info("Plugin saved to %s (with info.xml, __init__.py, about.html)",
+                     filepath)
         return filepath
 
 
 def _show_generate_plugin_dialog():
     """Menu callback for AI > Generate Plugin."""
-    from qtpy import QtWidgets
-    from .. import global_vars as g
-
-    description, ok = QtWidgets.QInputDialog.getMultiLineText(
-        g.m, "AI Plugin Generator",
-        "Describe the plugin you want to create:"
-    )
-    if not ok or not description.strip():
-        return
-
-    name, ok2 = QtWidgets.QInputDialog.getText(
-        g.m, "Plugin Name", "Enter a name for the plugin:"
-    )
-    if not ok2 or not name.strip():
-        name = "generated_plugin"
-
-    try:
-        gen = PluginGenerator()
-        code = gen.generate_plugin(description, name)
-    except Exception as e:
-        g.alert(f"Plugin generation error: {e}")
-        return
-
-    from qtpy.QtWidgets import QMessageBox
-    reply = g.messageBox(
-        "Save Plugin?",
-        f"Plugin '{name}' generated successfully.\nSave to ~/.FLIKA/plugins/{name}/?",
-        QMessageBox.Yes | QMessageBox.No,
-    )
-    if reply == QMessageBox.Yes:
-        try:
-            path = gen.save_plugin(code, name)
-            g.alert(f"Plugin saved to {path}")
-        except Exception as e:
-            g.alert(f"Failed to save plugin: {e}")
-    else:
-        from ..app.script_editor import ScriptEditor
-        ScriptEditor.show()
-        ScriptEditor.gui.editor.setPlainText(code)
+    from .plugin_dialog import PluginGeneratorDialog
+    PluginGeneratorDialog.show_dialog()
