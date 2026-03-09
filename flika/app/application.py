@@ -354,6 +354,8 @@ class FlikaApplication(QtWidgets.QMainWindow):
         claudeMenu.addSeparator()
         claudeMenu.addAction("Generate Script", self._ai_generate_script)
         claudeMenu.addAction("Generate Plugin", self._ai_generate_plugin)
+        claudeMenu.addSeparator()
+        claudeMenu.addAction("Safety Settings...", self._ai_safety_settings)
         aiMenu.addAction("AI Denoiser", self._ai_denoise)
         aiMenu.addAction("Pixel Classifier", self._ai_classify)
         aiMenu.addAction("Particle Localizer", self._ai_localize)
@@ -423,6 +425,10 @@ class FlikaApplication(QtWidgets.QMainWindow):
     def _ai_generate_plugin(self):
         from ..ai.plugin_generator import _show_generate_plugin_dialog
         _show_generate_plugin_dialog()
+
+    def _ai_safety_settings(self):
+        from ..ai.safety import _show_safety_settings
+        _show_safety_settings()
 
     def _ai_cellpose(self):
         from ..ai.segmentation import cellpose_segment

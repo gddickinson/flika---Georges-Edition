@@ -232,7 +232,7 @@ class PluginGenerator:
         logger.info("AI plugin generator: creating %r from %r", name, description)
         prompt = f"Create a flika plugin named '{name}' that: {description}"
 
-        # Build system prompt with guidelines
+        # Build system prompt with guidelines and safety policy
         system = _SYSTEM_PROMPT.format(source_url=_get_source_url())
         guidelines = _load_guidelines()
         if guidelines:
@@ -240,6 +240,11 @@ class PluginGenerator:
                 "\n\n# Plugin Development Guidelines\n"
                 "Follow these rules strictly:\n\n" + guidelines
             )
+        try:
+            from .safety import get_policy_summary
+            system += "\n\n" + get_policy_summary()
+        except Exception:
+            pass
 
         message = self._client.messages.create(
             model=self._model,

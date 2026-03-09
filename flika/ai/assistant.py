@@ -177,14 +177,22 @@ class FlikaAssistant:
         self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model or _get_model()
 
+    def _build_system(self):
+        system = _SYSTEM_PROMPT.format(source_url=_get_source_url())
+        try:
+            from .safety import get_policy_summary
+            system += "\n\n" + get_policy_summary()
+        except Exception:
+            pass
+        return system
+
     def generate_script(self, description: str) -> str:
         """Turn a natural-language *description* into a flika Python script."""
         logger.info("AI assistant: generating script for %r", description)
-        system = _SYSTEM_PROMPT.format(source_url=_get_source_url())
         message = self._client.messages.create(
             model=self._model,
             max_tokens=4096,
-            system=system,
+            system=self._build_system(),
             messages=[{"role": "user", "content": description}],
         )
         return message.content[0].text
@@ -192,11 +200,10 @@ class FlikaAssistant:
     def generate_with_history(self, messages: list[dict]) -> str:
         """Generate a script using multi-turn conversation history."""
         logger.info("AI assistant: generating with %d messages", len(messages))
-        system = _SYSTEM_PROMPT.format(source_url=_get_source_url())
         message = self._client.messages.create(
             model=self._model,
             max_tokens=4096,
-            system=system,
+            system=self._build_system(),
             messages=messages,
         )
         return message.content[0].text

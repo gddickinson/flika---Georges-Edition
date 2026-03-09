@@ -19,39 +19,12 @@ from ..logger import logger
 
 
 # ---------------------------------------------------------------------------
-# Code safety checking for AI-generated code
+# Code safety — delegated to centralized safety module
 # ---------------------------------------------------------------------------
-
-_DANGEROUS_PATTERNS = [
-    (r'\bsubprocess\b', "subprocess module usage"),
-    (r'\bos\.system\b', "os.system() call"),
-    (r'\bshutil\.rmtree\b', "shutil.rmtree() call"),
-    (r'\b__import__\b', "dynamic __import__() call"),
-    (r'\beval\s*\(', "eval() call"),
-    (r'\bexec\s*\(', "exec() call"),
-    (r'\bopen\s*\([^)]*["\']w["\']', "file write via open()"),
-    (r'\brmtree\b', "rmtree call"),
-    (r'rm\s+-rf\b', "rm -rf command"),
-]
-
-# Session-level set of patterns the user has approved
-_approved_patterns: set = set()
-
-
-def _check_code_safety(code: str) -> tuple:
-    """Check AI-generated code for dangerous patterns.
-
-    Returns
-    -------
-    tuple of (is_safe: bool, warnings: list[str])
-        is_safe is False if any unapproved dangerous pattern is found.
-    """
-    warnings = []
-    for pattern, description in _DANGEROUS_PATTERNS:
-        if re.search(pattern, code):
-            if pattern not in _approved_patterns:
-                warnings.append(description)
-    return (len(warnings) == 0, warnings)
+from .safety import check_code_safety as _check_code_safety
+from .safety import request_approval as _request_approval
+from .safety import get_policy_summary as _get_policy_summary
+from .safety import _session_approved
 
 
 # ---------------------------------------------------------------------------
@@ -770,7 +743,10 @@ class LiveSessionDialog(QtWidgets.QDialog):
                    or 'https://github.com/gddickinson/flika---Georges-Edition')
         except Exception:
             url = 'https://github.com/gddickinson/flika---Georges-Edition'
-        return _LIVE_SYSTEM_PROMPT.format(source_url=url)
+        prompt = _LIVE_SYSTEM_PROMPT.format(source_url=url)
+        # Append safety policy so the model knows its restrictions
+        prompt += "\n\n" + _get_policy_summary()
+        return prompt
 
     # ------------------------------------------------------------------
     # Send / receive loop
@@ -889,21 +865,7 @@ class LiveSessionDialog(QtWidgets.QDialog):
             if tool_name == "execute_code" and code:
                 is_safe, warnings = _check_code_safety(code)
                 if not is_safe:
-                    warning_text = "\n".join(f"  - {w}" for w in warnings)
-                    reply = QtWidgets.QMessageBox.warning(
-                        self, "Potentially Dangerous Code",
-                        f"The AI wants to run code containing:\n\n"
-                        f"{warning_text}\n\n"
-                        f"Code:\n{code[:500]}\n\n"
-                        f"Allow this code to run?",
-                        QtWidgets.QMessageBox.StandardButton.Yes |
-                        QtWidgets.QMessageBox.StandardButton.No,
-                        QtWidgets.QMessageBox.StandardButton.No)
-                    if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-                        # Approve these patterns for the rest of the session
-                        for pat, _desc in _DANGEROUS_PATTERNS:
-                            if re.search(pat, code):
-                                _approved_patterns.add(pat)
+                    _request_approval(self, code, warnings)
 
             # Execute the tool
             result = _execute_tool_call(tool_name, tool_input)
@@ -1092,7 +1054,7 @@ class LiveSessionDialog(QtWidgets.QDialog):
         self._chat.clear()
         self._pending_tool_calls = []
         _action_log.clear()
-        _approved_patterns.clear()
+        _session_approved.clear()
         self._update_context_label()
         self._update_status()
         self._set_busy(False)

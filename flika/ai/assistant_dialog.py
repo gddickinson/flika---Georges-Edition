@@ -379,6 +379,12 @@ class AIAssistantDialog(QtWidgets.QDialog):
         """Insert the code and immediately run it in the Script Editor."""
         if not self._last_code:
             return
+        # Safety check before running AI-generated code
+        from .safety import check_code_safety, request_approval
+        is_safe, warnings = check_code_safety(self._last_code)
+        if not is_safe:
+            if not request_approval(self, self._last_code, warnings):
+                return
         try:
             from ..app.script_editor import ScriptEditor
             ScriptEditor.show()
