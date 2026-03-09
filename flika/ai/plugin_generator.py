@@ -8,9 +8,91 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 from typing import Optional
 
 from ..logger import logger
+
+
+def _load_guidelines() -> str:
+    """Load plugin guidelines from ~/.FLIKA/plugin_guidelines.md if it exists."""
+    path = os.path.join(os.path.expanduser("~"), '.FLIKA', 'plugin_guidelines.md')
+    try:
+        with open(path, 'r') as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
+
+
+def _validate_plugin_structure(code: str) -> list[str]:
+    """Validate generated plugin code against critical rules.
+
+    Returns a list of warning strings (empty = all checks passed).
+    """
+    warnings = []
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return ["Code has syntax errors"]
+
+    # Find all class definitions (top-level)
+    classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+    if not classes:
+        warnings.append("No class definition found")
+        return warnings
+
+    cls = classes[0]
+    class_name = cls.name
+
+    # Check for module-level instance: ClassName()
+    has_instance = False
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if (isinstance(node.value, ast.Call) and
+                    isinstance(node.value.func, ast.Name) and
+                    node.value.func.id == class_name):
+                has_instance = True
+                break
+    if not has_instance:
+        warnings.append(
+            f"No module-level instance of {class_name}() found — "
+            "plugin will not load")
+
+    # Check class methods
+    methods = {n.name: n for n in cls.body if isinstance(n, ast.FunctionDef)}
+
+    # Check gui() method
+    if 'gui' in methods:
+        gui_src = ast.get_source_segment(code, methods['gui'])
+        if gui_src:
+            if 'gui_reset' not in gui_src:
+                warnings.append("gui() missing self.gui_reset() call")
+            if 'super().gui()' not in gui_src and 'super().gui(' not in gui_src:
+                warnings.append("gui() missing super().gui() call")
+
+    # Check __call__() method
+    if '__call__' in methods:
+        call_node = methods['__call__']
+        call_src = ast.get_source_segment(code, call_node)
+        if call_src:
+            # Check for BaseProcess patterns (not needed for noPriorWindow)
+            is_no_prior = any(
+                'BaseProcess_noPriorWindow' in ast.get_source_segment(code, n)
+                for n in tree.body
+                if isinstance(n, (ast.Import, ast.ImportFrom))
+                and ast.get_source_segment(code, n)
+            )
+            if not is_no_prior:
+                if 'self.start(' not in call_src:
+                    warnings.append("__call__() missing self.start() call")
+            if 'self.end()' not in call_src:
+                warnings.append("__call__() missing self.end() call")
+            if 'return' not in call_src or 'self.end()' not in call_src:
+                warnings.append("__call__() should end with return self.end()")
+    else:
+        warnings.append("No __call__() method found")
+
+    return warnings
 
 _SYSTEM_PROMPT = """\
 You are an expert Python developer who writes *flika* plugins.
@@ -147,10 +229,19 @@ class PluginGenerator:
         self._model = model or _get_model()
 
     def generate_plugin(self, description: str, name: str = "generated_plugin") -> str:
-        """Generate plugin code and validate it with ast.parse."""
+        """Generate plugin code, validate syntax and structure."""
         logger.info("AI plugin generator: creating %r from %r", name, description)
         prompt = f"Create a flika plugin named '{name}' that: {description}"
+
+        # Build system prompt with guidelines
         system = _SYSTEM_PROMPT.format(source_url=_get_source_url())
+        guidelines = _load_guidelines()
+        if guidelines:
+            system += (
+                "\n\n# Plugin Development Guidelines\n"
+                "Follow these rules strictly:\n\n" + guidelines
+            )
+
         message = self._client.messages.create(
             model=self._model,
             max_tokens=4096,
@@ -159,12 +250,46 @@ class PluginGenerator:
         )
         code = message.content[0].text
 
+        # Strip markdown fences if the model wrapped the code
+        code = re.sub(r'^```python\s*\n', '', code)
+        code = re.sub(r'\n```\s*$', '', code)
+
         # Validate syntax
         try:
             ast.parse(code)
         except SyntaxError as e:
             raise ValueError(f"Generated code has syntax errors: {e}") from e
 
+        # Validate plugin structure
+        structure_warnings = _validate_plugin_structure(code)
+        if structure_warnings:
+            logger.warning("Plugin structure warnings: %s", structure_warnings)
+            # Attempt auto-fix for missing module-level instance
+            if any("No module-level instance" in w for w in structure_warnings):
+                code = self._fix_missing_instance(code)
+                # Re-validate
+                structure_warnings = _validate_plugin_structure(code)
+
+        self._structure_warnings = structure_warnings
+        return code
+
+    def _fix_missing_instance(self, code: str) -> str:
+        """Append a module-level instance if one is missing."""
+        try:
+            tree = ast.parse(code)
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef):
+                    class_name = node.name
+                    # Convert CamelCase to snake_case
+                    instance_name = re.sub(
+                        r'(?<!^)(?=[A-Z])', '_', class_name
+                    ).lower()
+                    code = code.rstrip() + f"\n\n{instance_name} = {class_name}()\n"
+                    logger.info("Auto-added module-level instance: %s = %s()",
+                                instance_name, class_name)
+                    return code
+        except Exception:
+            pass
         return code
 
     def save_plugin(self, code: str, name: str, description: str = "") -> str:

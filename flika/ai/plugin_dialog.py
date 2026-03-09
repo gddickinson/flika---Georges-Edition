@@ -257,7 +257,17 @@ class PluginGeneratorDialog(QtWidgets.QDialog):
         self._btn_save.setEnabled(True)
         self._btn_editor.setEnabled(True)
         self._btn_copy.setEnabled(True)
-        self._update_status("Plugin generated successfully! Review the code below.")
+
+        # Show structure validation warnings if any
+        warnings = getattr(self._generator, '_structure_warnings', [])
+        if warnings:
+            warn_text = "\n".join(f"  - {w}" for w in warnings)
+            self._update_status(
+                f"Plugin generated with warnings:\n{warn_text}\n"
+                "Review the code carefully before saving.")
+        else:
+            self._update_status(
+                "Plugin generated successfully! Review the code below.")
 
     def _on_error(self, msg):
         self._preview.setPlainText(f"Error: {msg}")

@@ -284,14 +284,16 @@ def str2func(plugin_name, file_location, function):
         for i in range(1, len(levels)):
             module = getattr(module, levels[i])
 
-    # Wrap the callable so runtime output is also filtered
+    # Wrap the callable so runtime output is also filtered.
+    # Qt's triggered signal passes a `checked` bool — drop it so
+    # plugin gui() methods (which take no arguments) aren't broken.
     if callable(module):
         raw_func = module
         import functools
         @functools.wraps(raw_func)
         def _filtered_call(*args, **kwargs):
             with _PluginOutputFilter(plugin_name):
-                return raw_func(*args, **kwargs)
+                return raw_func()
         return _filtered_call
     return module
 
