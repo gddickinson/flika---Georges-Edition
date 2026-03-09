@@ -1,8 +1,8 @@
 # Process Menu
 
 The Process menu contains image processing operations organized into submenus: Binary,
-Math, Filters, Image Calculator, Segmentation, Detection, Colocalization, SPT Analysis,
-and Export Video.
+Math, Filters, Deconvolution, Structures, Segmentation, Detection, Colocalization,
+Watershed, Stitching, SPT Analysis, Morphometry, Dynamics, Export, and more.
 
 All operations act on the current window (`g.win`) and produce a new window with the result.
 They support undo/redo and are recorded in the macro.
@@ -149,6 +149,109 @@ denoised = median_filter(radius=3)
 | **Minimum Filter** | Local minimum over a neighborhood. |
 | **Percentile Filter** | Local percentile over a neighborhood. |
 
+### Bleach Correction
+
+**Process > Filters > Bleach Correction** corrects photobleaching artifacts in
+time-series data. Three correction methods are available:
+
+| Method | Description |
+|---|---|
+| **Exponential Fit** | Fits an exponential decay to the mean intensity trace and divides each frame by the fitted curve. Best for monotonic bleaching. |
+| **Histogram Matching** | Adjusts each frame's histogram to match the first frame's distribution. Preserves the overall intensity profile. |
+| **Ratio to Mean** | Divides each frame by its mean intensity and multiplies by the global mean. Simple normalization suitable for mild bleaching. |
+
+```python
+from flika.process.filters import bleach_correction
+corrected = bleach_correction(method='Exponential Fit')
+corrected = bleach_correction(method='Histogram Matching')
+corrected = bleach_correction(method='Ratio to Mean')
+```
+
+## Deconvolution
+
+**Process > Deconvolution** provides image deconvolution to reverse optical blur using
+a point spread function (PSF) model.
+
+| Operation | Description |
+|---|---|
+| **Richardson-Lucy** | Iterative maximum-likelihood deconvolution. Suitable for Poisson noise (fluorescence). Controls: PSF sigma, PSF size, number of iterations. |
+| **Wiener Deconvolution** | Frequency-domain deconvolution using a Wiener filter. Fast, single-pass. Controls: PSF sigma, PSF size, noise variance. |
+
+Both operations generate a PSF internally from two supported models:
+
+| PSF Model | Description |
+|---|---|
+| **Gaussian** | Symmetric 2D Gaussian kernel. Parameterized by sigma and kernel size. |
+| **Airy Disk** | Diffraction-limited PSF based on the Airy pattern. More physically accurate for optical microscopy. |
+
+All deconvolution operations support 4D data via the `per_plane` decorator.
+
+```python
+from flika.process.deconvolution import richardson_lucy, wiener_deconvolution, generate_psf
+
+# Generate a PSF manually
+psf = generate_psf(model='gaussian', sigma=1.5, size=15)
+
+# Richardson-Lucy iterative deconvolution
+result = richardson_lucy(psf_sigma=1.5, psf_size=15, iterations=20)
+
+# Wiener frequency-domain deconvolution
+result = wiener_deconvolution(psf_sigma=1.5, psf_size=15, noise_var=0.01)
+```
+
+## Structures
+
+**Process > Structures** provides structure detection, network analysis, and texture
+characterization operations.
+
+### Vesselness and Thinning
+
+| Operation | Description |
+|---|---|
+| **Frangi Vesselness** | Multi-scale Frangi vesselness filter for detecting tubular structures (vessels, neurites, filaments). Uses Hessian eigenvalues to enhance elongated features. |
+| **Skeletonize** | Morphological thinning of a binary image to a 1-pixel-wide skeleton. Preserves topology of the original shape. |
+| **Medial Axis** | Computes the medial axis (topological skeleton) of a binary image, along with the distance transform to the boundary. |
+
+```python
+from flika.process.structures import frangi_vesselness, skeletonize_process, medial_axis_process
+vessels = frangi_vesselness()
+skeleton = skeletonize_process()
+medial = medial_axis_process()
+```
+
+### Network Analysis (Submenu)
+
+**Process > Structures > Network Analysis** contains operations for extracting and
+analyzing graph-like structures from skeletonized images.
+
+| Operation | Description |
+|---|---|
+| **Skeleton Analysis** | Extracts a graph from a skeleton image: identifies branch points, endpoints, traces individual segments, and measures branch lengths. Results are overlaid on the image and reported in a table. |
+| **Hough Lines** | Detects straight lines using the probabilistic Hough transform. Returns line segments with start/end coordinates. Configurable threshold, minimum line length, and maximum gap. |
+| **Hough Circles** | Detects circles using the Hough gradient method. Returns center coordinates and radii. Configurable radius range and sensitivity. |
+
+```python
+from flika.process.structures import skeleton_analysis, hough_lines, hough_circles
+graph = skeleton_analysis()
+lines = hough_lines()
+circles = hough_circles()
+```
+
+### Corner and Texture Detection
+
+| Operation | Description |
+|---|---|
+| **Corner Detection** | Detects corners using Harris or Shi-Tomasi methods. Harris uses the eigenvalue product of the structure tensor; Shi-Tomasi uses the minimum eigenvalue. Both return a corner response map. |
+| **LBP Texture** | Computes Local Binary Pattern (LBP) texture descriptors. Encodes local intensity relationships around each pixel into a rotation-invariant code. Useful for texture classification. |
+| **Structure Tensor** | Computes the structure tensor for each pixel, yielding coherency (anisotropy measure, 0-1) and orientation (angle) maps. Useful for analyzing fiber alignment and directional structures. |
+
+```python
+from flika.process.structures import corner_detection, local_binary_pattern_process, structure_tensor_analysis
+corners = corner_detection(method='Harris')
+lbp = local_binary_pattern_process()
+tensor = structure_tensor_analysis()
+```
+
 ## Image Calculator
 
 Performs pixel-wise arithmetic between two windows. Select two windows and an operation
@@ -173,6 +276,28 @@ Advanced segmentation algorithms for labeling and partitioning images.
 | **SLIC Superpixels** | Segments image into compact superpixels. |
 | **Find Boundaries** | Extracts boundaries between labeled regions. |
 | **Find Contours** | Detects contour lines at a specified intensity level. |
+
+## Watershed
+
+**Process > Watershed** provides marker-controlled watershed segmentation for separating
+touching objects, particularly useful after distance transform preprocessing.
+
+| Operation | Description |
+|---|---|
+| **Distance Transform** | Computes the Euclidean distance from each foreground pixel to the nearest background pixel. Useful for measuring object thickness and as input to watershed. |
+| **Watershed Segmentation** | Marker-controlled watershed on a distance or intensity image. Markers are generated from local maxima of the distance transform. Separates touching/overlapping objects into individually labeled regions. |
+
+The typical workflow is:
+
+1. Threshold the image to create a binary mask
+2. Apply Distance Transform to get a distance map
+3. Run Watershed Segmentation to split touching objects
+
+```python
+from flika.process.watershed import distance_transform, watershed_segmentation
+dist = distance_transform()
+labels = watershed_segmentation()
+```
 
 ## Detection
 
@@ -199,6 +324,178 @@ Quantitative colocalization analysis between two channels.
 - **Scatter plot** -- interactive 2D histogram of channel intensities
 
 See also: [Image Menu > Color](image_menu.md#color) for channel splitting.
+
+## Stitching
+
+**Process > Stitch Images** combines two overlapping images (or stacks) into a single
+seamless mosaic using subpixel registration.
+
+| Feature | Description |
+|---|---|
+| **Phase Cross-Correlation** | Subpixel registration using phase correlation in the Fourier domain. Detects the translational offset between overlapping regions with 1/10 pixel accuracy. |
+| **Overlap Percentage** | Configurable overlap fraction (default 10%). Determines the region used for registration. |
+| **Linear Blending** | Smooth blending at seams using a linear ramp in the overlap zone. Eliminates visible seam artifacts. |
+| **Direction** | Horizontal (side-by-side) or vertical (top-bottom) stitching. |
+| **Stack Support** | Works on both 2D images and 3D time-series stacks. Each frame in a stack is stitched with the same computed offset. |
+
+```python
+from flika.process.stitching import stitch_images
+# Stitch two windows horizontally with 15% overlap
+stitched = stitch_images(direction='Horizontal', overlap=15)
+```
+
+## Dynamics
+
+**Analyze > Dynamics** contains specialized analysis modules for time-resolved
+microscopy experiments.
+
+### FRAP Analysis
+
+Fluorescence Recovery After Photobleaching analysis. Quantifies molecular mobility
+from recovery curves.
+
+| Feature | Description |
+|---|---|
+| **Double Normalization** | Normalizes the recovery curve so pre-bleach baseline = 1.0 and post-bleach minimum = 0.0. |
+| **Single Exponential Fit** | Fits `I(t) = A * (1 - exp(-t/tau)) + offset` to extract the recovery time constant and mobile fraction. |
+| **Double Exponential Fit** | Two-component recovery for systems with fast and slow mobile populations. |
+| **Soumpasis Diffusion Model** | Fits the Soumpasis equation for uniform circular bleach spots to extract the diffusion coefficient. |
+
+Results include: half-time of recovery, mobile fraction, immobile fraction, diffusion
+coefficient (Soumpasis), and R-squared goodness of fit.
+
+```python
+from flika.process.frap import frap_analysis
+frap_analysis(bleach_frame=10, pre_bleach_frames=5, model='Single Exponential')
+```
+
+### FRET Analysis
+
+Forster Resonance Energy Transfer analysis between donor and acceptor channels.
+
+| Feature | Description |
+|---|---|
+| **Apparent FRET Efficiency** | Pixel-wise `E = Ia / (Ia + Id)` after background subtraction. |
+| **Corrected FRET** | Applies spectral bleed-through and direct excitation corrections. |
+| **Stoichiometry** | Computes the donor fraction `S = (Id + Ia) / total` for each pixel. |
+| **Histogram** | Displays distributions of FRET efficiency and stoichiometry values. |
+
+```python
+from flika.process.fret import fret_analysis
+fret_analysis()
+```
+
+### Calcium Analysis
+
+Calcium imaging analysis for detecting and quantifying calcium transients.
+
+| Feature | Description |
+|---|---|
+| **dF/F Calculation** | Computes Delta-F/F0 from a baseline period. Supports mean, median, or percentile baseline methods. |
+| **Event Detection** | Detects calcium transients using threshold crossing on the dF/F trace. Reports event times, amplitudes, durations, and inter-event intervals. |
+| **Statistics** | Computes event frequency, mean amplitude, mean duration, area under curve, and peak dF/F for each ROI. |
+| **Temporal Smoothing** | Optional Savitzky-Golay or moving average smoothing before event detection. |
+
+```python
+from flika.process.calcium import calcium_analysis
+calcium_analysis(baseline_frames=50, threshold=3.0)
+```
+
+### Spectral Unmixing
+
+Linear spectral unmixing for separating overlapping fluorophore signals.
+
+| Feature | Description |
+|---|---|
+| **NNLS Unmixing** | Non-negative least squares: enforces physically meaningful (non-negative) abundance values. Solves `data = spectra @ abundances` per pixel. |
+| **Least-Squares Unmixing** | Unconstrained linear least squares. Faster but may produce negative values. |
+| **PCA Endmember Estimation** | Automatically estimates reference spectra from the data using Principal Component Analysis when reference spectra are not available. |
+
+Output is a multi-channel abundance map with one channel per fluorophore component.
+
+```python
+from flika.process.spectral import spectral_unmixing
+spectral_unmixing(method='nnls')
+```
+
+## Morphometry
+
+**Process > Morphometry** (also accessible via **Analyze > Morphometry**) provides
+quantitative shape and texture measurements for labeled regions.
+
+### Region Properties
+
+Computes geometric and intensity-based measurements for each labeled region in the image.
+
+| Property | Description |
+|---|---|
+| **Area** | Number of pixels in the region. |
+| **Perimeter** | Length of the region boundary. |
+| **Centroid** | (y, x) coordinates of the region center of mass. |
+| **Bounding Box** | Smallest rectangle enclosing the region. |
+| **Major/Minor Axis** | Lengths of the major and minor axes of the best-fit ellipse. |
+| **Eccentricity** | Ratio of focal distance to major axis length (0 = circle, 1 = line). |
+| **Solidity** | Region area divided by convex hull area. |
+| **Circularity** | `4 * pi * area / perimeter^2` (1.0 = perfect circle). |
+| **Equivalent Diameter** | Diameter of a circle with the same area as the region. |
+| **Extent** | Region area divided by bounding box area. |
+| **Aspect Ratio** | Major axis / minor axis. |
+| **Intensity Stats** | Mean, max, min, and standard deviation of intensity (when an intensity image is provided). |
+
+### Haralick Texture
+
+Computes GLCM (Gray-Level Co-occurrence Matrix) texture features for quantifying
+spatial patterns in intensity images.
+
+| Feature | Description |
+|---|---|
+| **Contrast** | Measures local intensity variation. High for rough textures. |
+| **Correlation** | Measures linear dependency of gray levels on neighboring pixels. |
+| **Energy** | Sum of squared GLCM elements. High for uniform textures. |
+| **Homogeneity** | Measures closeness of GLCM element distribution to the diagonal. High for smooth textures. |
+
+### Hu Moments
+
+Computes the 7 Hu invariant moments for each region. These are rotation-invariant,
+scale-invariant, and translation-invariant shape descriptors derived from central
+moments. Useful for shape matching and classification.
+
+```python
+from flika.process.morphometry import morphometry_analysis
+morphometry_analysis()
+```
+
+## Color Conversions
+
+**Image > Color** provides color space conversions and grayscale extraction for
+RGB images.
+
+### Color Space Conversions
+
+| Conversion | Description |
+|---|---|
+| **RGB to HSV** | Converts to Hue-Saturation-Value. Hue encodes color, saturation encodes purity, value encodes brightness. Useful for color-based segmentation. |
+| **HSV to RGB** | Converts HSV back to RGB color space. |
+| **RGB to LAB** | Converts to CIELAB (L*a*b*). Perceptually uniform: equal distances in LAB correspond to equal perceived color differences. |
+| **LAB to RGB** | Converts LAB back to RGB color space. |
+| **RGB to YCrCb** | Converts to luma (Y) and chroma (Cr, Cb) components. Used in video compression and skin-tone detection. |
+| **YCrCb to RGB** | Converts YCrCb back to RGB color space. |
+
+### Grayscale Conversion
+
+Converts an RGB image to single-channel grayscale using one of three methods:
+
+| Method | Description |
+|---|---|
+| **Luminance** | Weighted sum: `0.2126*R + 0.7152*G + 0.0722*B` (ITU-R BT.709). Matches human brightness perception. |
+| **Average** | Simple mean: `(R + G + B) / 3`. |
+| **Lightness** | `(max(R,G,B) + min(R,G,B)) / 2`. HSL lightness component. |
+
+```python
+from flika.process.color import convert_color_space, grayscale
+hsv = convert_color_space(conversion='RGB to HSV')
+gray = grayscale(method='Luminance')
+```
 
 ## SPT Analysis
 
@@ -251,6 +548,24 @@ from flika.process.background_sub import background_subtract
 background_subtract(method='Auto ROI', scope='Per Frame')
 # Statistical median, whole stack
 background_subtract(method='Statistical', stat_method='Median', scope='Whole Stack')
+```
+
+## Batch Export
+
+**Process > Export > Batch Export** exports the current window's image data to disk in
+bulk.
+
+| Feature | Description |
+|---|---|
+| **TIFF** | Exports the full stack as a multi-page TIFF file (float32 or uint16). |
+| **PNG** | Exports individual frames as numbered PNG files in a directory. |
+| **NPY** | Exports the raw numpy array as a `.npy` file (preserves exact dtype and shape). |
+| **Image Sequence** | For 3D stacks, exports each frame as a separate numbered image file. Useful for importing into other software. |
+
+```python
+from flika.process.export import batch_export
+batch_export(format='TIFF', path='/path/to/output.tif')
+batch_export(format='PNG', path='/path/to/output_dir/')
 ```
 
 ## Export Video

@@ -31,9 +31,11 @@ figure composition.
 ### Advanced Features
 
 - [Single Particle Tracking](spt_guide.md) -- Detection, linking, analysis, classification, batch processing
-- [AI Tools](ai_tools.md) -- Pixel classifier, SAM, denoiser, model zoo, Cellpose, StarDist
+- [AI Tools](ai_tools.md) -- Pixel classifier, SAM, denoiser, model zoo, Cellpose, StarDist, Claude Live Session, Safety Settings
 - [Interoperability](interoperability.md) -- napari bridge, ImageJ bridge, OME export, batch processing
 - [Figure Composer](user_interface.md#figure-composer) -- Publication figure layout (covered in UI guide)
+- [Microscopy Simulation](simulation.md) -- Synthetic data generation, PSF models, camera noise, benchmarking
+- [Microscopy Analysis](analysis.md) -- FRAP, FRET, Calcium imaging, Spectral unmixing, Morphometry
 
 ### Extending Flika
 
@@ -78,6 +80,16 @@ Flika is organized around a few core concepts:
 
 ## Recent Highlights
 
+- **Microscopy Simulation** -- Full synthetic data generation pipeline with PSF models,
+  camera noise simulation, 10 quick presets, and integrated benchmarking
+- **Claude Live Session** -- Interactive multi-turn AI chat for image analysis guidance
+  and code generation directly within the application
+- **AI Safety Settings** -- Configurable safety controls for AI operations including
+  confirmation prompts, resource limits, and audit logging
+- **Structure Detection** -- Frangi vesselness, skeletonization, medial axis, Hough
+  transforms, corner detection, LBP texture, and structure tensor analysis
+- **Microscopy Analysis** -- Dedicated modules for FRAP, FRET, Calcium imaging,
+  Spectral unmixing, and Morphometry with publication-ready output
 - **Background Subtraction** -- manual ROI, auto-detected ROI, and statistical methods
   (mean/median/mode/percentile) with per-frame or whole-stack options
 - **Enhanced Overlays** -- timestamp and scale bar auto-populate from pixel_size and
@@ -99,3 +111,4 @@ Flika stores user data in `~/.FLIKA/`:
 | `models/` | AI model weights |
 | `templates/` | Workflow templates |
 | `logs/` | Application log files |
+| `plugin_guidelines.md` | Guidelines and conventions for plugin development |

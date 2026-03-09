@@ -8,26 +8,45 @@ basic image operations.
 ### Prerequisites
 
 - Python 3.12 (recommended via Anaconda/Miniconda)
+- Git (for cloning the repository)
 - A working display for the GUI (or use headless mode for scripting)
 
-### Creating an Environment
+### Step 1: Create a Conda Environment
 
 ```bash
-conda create -n flika_env python=3.12
-conda activate flika_env
+conda create -n flika python=3.12
+conda activate flika
 ```
 
-### Installing Flika
+### Step 2: Clone the Repository
 
 ```bash
-pip install flika
+git clone https://github.com/gddickinson/flika---Georges-Edition.git
+cd flika---Georges-Edition
 ```
 
-Or from the source directory:
+### Step 3: Install in Development Mode
 
 ```bash
-cd /path/to/flika
 pip install -e .
+```
+
+### Optional Dependencies
+
+Install extras for specific features:
+
+```bash
+# AI tools (denoiser, classifiers, assistant)
+pip install -e ".[ai]"
+
+# Segmentation (Cellpose, StarDist, SAM)
+pip install -e ".[segmentation]"
+
+# Single Particle Tracking
+pip install -e ".[spt]"
+
+# Multiple extras at once
+pip install -e ".[ai,segmentation,spt]"
 ```
 
 ### Key Dependencies

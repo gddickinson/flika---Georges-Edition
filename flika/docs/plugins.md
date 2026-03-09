@@ -188,6 +188,26 @@ Key `BaseProcess` methods:
 | `end()` | Finish processing (creates new window, records macro) |
 | `gui_reset()` | Clear previous GUI items |
 
+#### BaseProcess_noPriorWindow
+
+For operations that create a new window without requiring an existing one (e.g.,
+simulations, file generators), inherit from `BaseProcess_noPriorWindow` instead.
+
+**Important:** `BaseProcess_noPriorWindow` plugins MUST still call `self.start()` with
+no arguments. This sets `self.command`, which `self.end()` needs to record the macro
+and complete the operation. Omitting `self.start()` will cause `self.end()` to fail.
+
+```python
+from flika.utils.BaseProcess import BaseProcess_noPriorWindow
+
+class MyGenerator(BaseProcess_noPriorWindow):
+    def __call__(self, width=256, height=256):
+        self.start()  # Required -- sets self.command
+        self.newtif = np.random.rand(height, width).astype(np.float32)
+        self.newname = 'Random Image'
+        return self.end()
+```
+
 ### Step 5: GUI Widgets
 
 Flika provides several widgets for plugin GUIs:
@@ -200,6 +220,33 @@ Flika provides several widgets for plugin GUIs:
 | `WindowSelector` | Dropdown to select an open window |
 | `FileSelector` | File browser dialog |
 
+#### Convenience Methods
+
+BaseProcess provides convenience methods for building plugin GUIs more concisely. Use
+these inside `gui()` after calling `self.gui_reset()`:
+
+```python
+def gui(self):
+    self.gui_reset()
+    self.add_slider('name', 'Label', value, lo, hi, decimals=2)
+    self.add_slider_odd('name', 'Label', value, lo, hi)
+    self.add_checkbox('name', 'Label', checked=False)
+    self.add_combo('name', 'Label', ['Option A', 'Option B'], default=0)
+    self.add_window('name', 'Label')
+    super().gui()
+```
+
+| Method | Purpose |
+|---|---|
+| `add_slider(name, label, value, lo, hi, decimals=2)` | Add a numeric slider with range and precision |
+| `add_slider_odd(name, label, value, lo, hi)` | Add a slider constrained to odd values (useful for kernel sizes) |
+| `add_checkbox(name, label, checked=False)` | Add a boolean checkbox |
+| `add_combo(name, label, options, default=0)` | Add a dropdown with a list of options |
+| `add_window(name, label)` | Add a window selector dropdown |
+
+These methods handle creating the widget, setting its range/value, and appending it to
+`self.items` automatically.
+
 ### Step 6: Test Your Plugin
 
 ```python
@@ -209,6 +256,49 @@ import my_plugin
 importlib.reload(my_plugin)
 ```
 
+## AI Plugin Generator
+
+Flika includes an AI-powered plugin generator accessible via **AI > Claude > Generate Plugin**.
+This tool can create complete, working plugins from a natural language description.
+
+### Workflow
+
+1. Open **AI > Claude > Generate Plugin**
+2. Enter a **plugin name** and a **description** of what the plugin should do
+3. Click **Generate** -- the AI creates the full plugin code
+4. **Review the code preview** in the dialog to verify correctness
+5. Click **Save & Load Plugin** to install it immediately into `~/.FLIKA/plugins/`
+
+The generated plugin is ready to use without restarting flika.
+
+### Structural Validation
+
+Before saving, the generator validates the plugin structure to ensure it follows flika
+conventions. It checks for:
+
+- `gui_reset()` call in the `gui()` method
+- `super().gui()` call to display the dialog
+- `self.start()` and `self.end()` calls in the `__call__` method
+- A module-level instance (e.g., `my_operation = MyOperation()`) required for menu binding
+
+### Auto-Fix
+
+The generator can automatically fix common structural issues:
+
+- **Missing module-level instance** -- adds the instance assignment at the end of the file
+- **Missing `self.start()`** -- inserts the call at the beginning of `__call__`
+
+### Plugin Guidelines
+
+The AI uses a guidelines file at `~/.FLIKA/plugin_guidelines.md` to inform code generation.
+You can edit this file to customize the style, conventions, or patterns the AI follows
+when generating plugins for your workflow.
+
+### Code Safety
+
+The standard code safety policy applies to AI-generated plugins. Review the generated
+code before loading it, especially if the plugin performs file I/O or network operations.
+
 ## Plugin Manager
 
 The Plugin Manager (**Plugins > Plugin Manager**) provides:
@@ -217,6 +307,34 @@ The Plugin Manager (**Plugins > Plugin Manager**) provides:
 - Available plugins from the flika plugin repository
 - Install, update, and uninstall operations
 - Dependency checking and installation
+- **Enable/disable individual plugins** -- toggle plugins on or off without uninstalling them
+- **Reload Plugins** button -- reload all plugins without restarting flika
+- **Suppress startup messages** -- option to hide plugin loading messages at startup
+- **GitHub repository browser** -- browse and install plugins directly from GitHub repositories
+
+### Enable/Disable Plugins
+
+Each installed plugin has an enable/disable toggle in the Plugin Manager. Disabled plugins
+remain in `~/.FLIKA/plugins/` but are not loaded at startup and do not appear in the
+Plugins menu. Re-enable a plugin and click **Reload Plugins** to activate it without
+restarting.
+
+### Reload Plugins
+
+The **Reload Plugins** button re-scans the plugins directory and reloads all enabled
+plugins. This is useful during development or after enabling/disabling plugins -- no
+restart is needed.
+
+### Suppress Startup Messages
+
+Check **Suppress startup messages** to hide the per-plugin loading messages that appear
+in the console when flika starts. Errors and warnings are still shown.
+
+### GitHub Repository Browser
+
+The Plugin Manager includes a GitHub repository browser that lets you search for and
+install plugins hosted on GitHub. Enter a search term or repository URL to find plugins,
+preview their descriptions, and install them directly.
 
 ### Checking Dependencies
 
