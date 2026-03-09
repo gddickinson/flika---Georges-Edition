@@ -65,7 +65,12 @@ def ipython_qt_event_loop_setup():
         logger.info("Starting flika inside IPython")
         from IPython import get_ipython
         ipython = get_ipython()
-        ipython.magic("gui qt")
+        if hasattr(ipython, 'run_line_magic'):
+            ipython.run_line_magic("gui", "qt")
+        elif hasattr(ipython, 'magic'):
+            ipython.magic("gui qt")
+        else:
+            logger.warning("Could not enable Qt event loop integration in IPython")
 
 def load_files(files):
     from .process.file_ import open_file
