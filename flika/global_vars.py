@@ -16,6 +16,7 @@ import multiprocessing
 import pathlib
 import uuid
 from collections.abc import MutableMapping
+from contextlib import contextmanager
 from typing import Any
 
 from qtpy import QtCore, QtGui, QtWidgets
@@ -71,6 +72,16 @@ class Settings(
         "rect_height": 5,
         "show_all_points": False,
         "default_roi_on_click": False,
+        "apply_to_all_planes": False,
+        "default_axis_order": "Auto",
+        "cs_shape": "circle",
+        "cs_inner_ratio": 0.5,
+        "pencil_value": 0,
+        "acceleration_device": "Auto",
+        "gpu_memory_limit": 0,
+        "auto_export_provenance": False,
+        "pixel_size": 108.0,
+        "frame_interval": 0.05,
     }
 
     def __init__(self):
@@ -78,6 +89,8 @@ class Settings(
             pathlib.Path("~").expanduser() / ".FLIKA" / "settings.json"
         )
         self.d = Settings.initial_settings.copy()
+        self._batch_count = 0
+        self._batch_dirty = False
         self.load()
 
     def __getitem__(self, item):
@@ -110,9 +123,32 @@ class Settings(
     def save(self):
         """save(self)
         Save settings file. The file is stored in ``~/.FLIKA/settings.json``"""
+        if self._batch_count > 0:
+            self._batch_dirty = True
+            return
         self.settings_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.settings_file, "w") as fp:
             json.dump(self.d, fp, indent=4)
+
+    @contextmanager
+    def batch(self):
+        """Context manager that defers saves until the block exits.
+
+        Example::
+
+            with g.settings.batch():
+                g.settings['roi_color'] = '#00ff00'
+                g.settings['point_size'] = 10
+            # single write happens here
+        """
+        self._batch_count += 1
+        try:
+            yield
+        finally:
+            self._batch_count -= 1
+            if self._batch_count == 0 and self._batch_dirty:
+                self._batch_dirty = False
+                self.save()
 
     def load(self):
         """load(self)
@@ -259,6 +295,19 @@ class SetCurrentWindowSignal(QtWidgets.QWidget):
         self.hide()
 
 
+headless = False  #: bool: True when running in headless mode (no GUI)
+
+
+def status_msg(msg):
+    """Show a message on the main window status bar, if available."""
+    if headless or m is None:
+        return
+    try:
+        m.statusBar().showMessage(msg)
+    except (RuntimeError, AttributeError):
+        pass
+
+
 def alert(msg, title="flika - Alert"):
     """alert(msg, title="flika - Alert')
     Creates a popup that alerts the user.
@@ -269,6 +318,8 @@ def alert(msg, title="flika - Alert"):
     """
 
     print("\nAlert: " + msg)
+    if headless or m is None:
+        return
     msgbx = QtWidgets.QMessageBox(m)
     msgbx.setIcon(QtWidgets.QMessageBox.Information)
     msgbx.setText(msg)

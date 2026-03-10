@@ -4,7 +4,7 @@ Main module for the flika application.
 """
 
 # Standard library imports
-import optparse
+import argparse
 import os
 import pathlib
 import platform
@@ -36,80 +36,61 @@ def parse_arguments(argv: list[str]) -> tuple[Any, list[str]]:
         argv: Arguments passed to program
 
     Returns:
-        A tuple of options, position arguments
+        A tuple of (namespace, positional_args)
     """
-    usage = """usage: %prog [FILE FILE...]
-
-    # start a new session
-    %prog
-
-    # start a new session and load a file
-    %prog image.tiff
-
-    #start a new session with multiple files
-    %prog image.tiff script.py
-
-    #run a script
-    %prog -x script.py
-
-    #increase verbosity level
-    %prog -v
-
-    #run the test suite0
-
-    %prog -t
-    """
-    parser = optparse.OptionParser(usage=usage, version=str(__version__))
-
-    parser.add_option(
+    parser = argparse.ArgumentParser(
+        prog="flika",
+        description="An interactive image processing program for biologists.",
+    )
+    parser.add_argument("files", nargs="*", help="Data files to load")
+    parser.add_argument(
         "-x",
         "--execute",
         action="store_true",
         dest="script",
         help="Open file in script editor and run",
-        default=False,
     )
-    parser.add_option(
+    parser.add_argument(
         "-t",
         "--test",
         action="store_true",
         dest="test",
         help="Run test suite",
-        default=False,
     )
-    parser.add_option(
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="Increase the vebosity level",
-        default=False,
+        help="Increase the verbosity level",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without GUI (headless mode)",
+    )
+    parser.add_argument(
+        "--script-file",
+        type=str,
+        dest="script_file",
+        help="Execute a Python script in headless mode and exit",
+    )
+    parser.add_argument(
+        "--batch",
+        type=str,
+        dest="batch_dir",
+        help="Process all files in directory using --script-file",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=str(__version__),
     )
 
-    err_msg = verify(parser, argv)
-    if err_msg:
-        sys.stderr.write(f"\n{err_msg}\n")
-        parser.print_help()
-        sys.exit(1)
+    args = parser.parse_args(argv)
+    if args.script and len(args.files) != 1:
+        parser.error("Must provide exactly one script with -x/--execute")
 
-    return parser.parse_args(argv)
-
-
-def verify(parser: optparse.OptionParser, argv: list[str]) -> str | None:
-    """Check for input errors
-
-    Arguments:
-        parser: OptionParser instance
-        argv: Argument list
-
-    Returns:
-        An error message in the event of an input error, or None
-    """
-    opts, args = parser.parse_args(argv)
-    err_msg = None
-    if opts.script and len(args) != 1:
-        err_msg = "Must provide a script\n"
-
-    return err_msg
+    return args, args.files
 
 
 def ipython_qt_event_loop_setup() -> None:
@@ -129,11 +110,12 @@ def load_files(files: list[str]) -> None:
         open_file(f)
 
 
-def start_flika(files: list[str] | None = None) -> FlikaApplication:
-    """Run a flika session and exit, beginning the event loop
+def start_flika(files: list[str] | None = None, headless: bool = False) -> FlikaApplication:
+    """Run a flika session, beginning the event loop.
 
     Parameters:
         files: An optional list of data files to load.
+        headless: If True, run without GUI (for scripting/batch).
 
     Returns:
         A flika application object with optional files loaded
@@ -141,18 +123,60 @@ def start_flika(files: list[str] | None = None) -> FlikaApplication:
     if files is None:
         files = []
     logger.debug("Started 'flika.start_flika()'")
-    print("Starting flika")
-    fa = FlikaApplication()
+    logger.info("Starting flika" + (" (headless)" if headless else ""))
+
+    import flika.global_vars as g
+
+    g.headless = headless
+    if headless:
+        g.settings["show_windows"] = False
+
+    fa = FlikaApplication(headless=headless)
     load_files(files)
-    fa.start()
-    ipython_qt_event_loop_setup()
+    if not headless:
+        fa.start()
+        ipython_qt_event_loop_setup()
     logger.debug("Completed 'flika.start_flika()'")
     return fa
 
 
+def start_flika_headless():
+    """Convenience function: start flika in headless mode for scripting.
+
+    Returns:
+        The global_vars module (g) for easy access to windows and settings.
+
+    Example::
+
+        from flika.flika import start_flika_headless
+        g = start_flika_headless()
+        from flika.process.file_ import open_file
+        from flika.process.filters import gaussian_blur
+        w = open_file('input.tif')
+        gaussian_blur(sigma=2.0)
+        g.win.save('output.tif')
+    """
+    import flika.global_vars as g
+
+    start_flika(headless=True)
+    return g
+
+
 def exec_() -> int:
     """Execute the flika application."""
-    fa = start_flika(sys.argv[1:])
+    args, files = parse_arguments(sys.argv[1:])
+
+    if args.headless or args.script_file:
+        fa = start_flika(files=files, headless=True)
+
+        if args.script_file:
+            logger.info(f"Executing script: {args.script_file}")
+            with open(args.script_file, "r") as f:
+                exec(f.read(), {"__builtins__": __builtins__, "__file__": args.script_file})
+
+        return 0
+
+    fa = start_flika(files)
     return fa.app.exec_()
 
 

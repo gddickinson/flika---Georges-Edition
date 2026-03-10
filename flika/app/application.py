@@ -159,14 +159,18 @@ class Logger(QtWidgets.QWidget):
 class FlikaApplication(QtWidgets.QMainWindow):
     """The main window of flika, stored as g.m"""
 
-    def __init__(self):
+    def __init__(self, headless: bool = False):
         from flika.process import setup_menus
 
+        self._headless = headless
         self.app = get_qapp(image_path("favicon.png"))
         super(FlikaApplication, self).__init__()
-        self.app.setQuitOnLastWindowClosed(True)
+        if not headless:
+            self.app.setQuitOnLastWindowClosed(True)
         setup_menus()
-        load_ui("main.ui", self, directory=os.path.dirname(__file__))
+
+        if not headless:
+            load_ui("main.ui", self, directory=os.path.dirname(__file__))
 
         g.m = self
         # These are all added for backwards compatibility for plugins
@@ -176,43 +180,49 @@ class FlikaApplication(QtWidgets.QMainWindow):
         self.currentWindow = g.win
         self.currentTrace = g.currentTrace
         self.clipboard = g.clipboard
-        self.setWindowSize()
-        if platform.system() == "Windows":
-            myappid = "flika-org.flika." + str(__version__)
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        self.menuBar().setNativeMenuBar(False)
-        self._make_menu()
-        self._make_tools()
 
-        self._log = Logger()
+        if not headless:
+            self.setWindowSize()
+            if platform.system() == "Windows":
+                myappid = "flika-org.flika." + str(__version__)
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            self.menuBar().setNativeMenuBar(False)
+            self._make_menu()
+            self._make_tools()
 
-        def handle_exception_wrapper(exc_type, exc_value, exc_traceback):
-            handle_exception(exc_type, exc_value, exc_traceback)
-            tb_str = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            tb_str = "".join(tb_str) + "\n"
-            self._log.write(tb_str)
+            self._log = Logger()
 
-        sys.excepthook = handle_exception_wrapper
+            def handle_exception_wrapper(exc_type, exc_value, exc_traceback):
+                handle_exception(exc_type, exc_value, exc_traceback)
+                tb_str = traceback.format_exception(exc_type, exc_value, exc_traceback)
+                tb_str = "".join(tb_str) + "\n"
+                self._log.write(tb_str)
 
-        g.dialogs.append(self._log)
-        self._log.window().setWindowTitle("Console Log")
-        self._log.resize(550, 550)
+            sys.excepthook = handle_exception_wrapper
 
-        self.statusBar().addPermanentWidget(self._log.status_light)
-        self.statusBar().setContentsMargins(2, 0, 20, 2)
-        self.statusBar().setSizeGripEnabled(False)
-        self.setCurrentWindowSignal = SetCurrentWindowSignal(self)
-        self.setAcceptDrops(True)
+            g.dialogs.append(self._log)
+            self._log.window().setWindowTitle("Console Log")
+            self._log.resize(550, 550)
 
-        # Load plugins synchronously
-        plugins, errors = load_local_plugins()
-        self.plugins_done(plugins)
-        # Show any errors that occurred
-        for error in errors:
-            g.alert(error)
+            self.statusBar().addPermanentWidget(self._log.status_light)
+            self.statusBar().setContentsMargins(2, 0, 20, 2)
+            self.statusBar().setSizeGripEnabled(False)
+            self.setCurrentWindowSignal = SetCurrentWindowSignal(self)
+            self.setAcceptDrops(True)
+
+            # Load plugins synchronously
+            plugins, errors = load_local_plugins()
+            self.plugins_done(plugins)
+            # Show any errors that occurred
+            for error in errors:
+                g.alert(error)
+
+            self.setup_button_icons()
+        else:
+            # Minimal headless init
+            self.setCurrentWindowSignal = SetCurrentWindowSignal(self)
+
         logger.debug("Completed 'creating app.application.FlikaApplication'")
-
-        self.setup_button_icons()
 
         # Register the application cleanup function to ensure threads are terminated
         self.app.aboutToQuit.connect(self.cleanup_application)
