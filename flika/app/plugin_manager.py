@@ -1,10 +1,19 @@
 """
 Plugin manager for flika.
+
+Provides:
+- Enable/disable individual plugins (persisted in settings)
+- Control plugin logging verbosity (startup messages, debug, etc.)
+- Download plugins from a configurable central repository
+- Remove plugins from the plugins folder
+- Plugin search, install, update, and dependency management
 """
 
 import dataclasses
 import difflib
 import importlib.metadata
+import io
+import logging as _logging
 import os
 import pathlib
 import platform
@@ -27,6 +36,172 @@ from flika.images import image_path
 from flika.logger import logger
 from flika.utils.misc import load_ui
 from flika.utils.thread_manager import ThreadController, run_in_thread
+
+
+# ---------------------------------------------------------------------------
+# Plugin settings keys in g.settings
+# ---------------------------------------------------------------------------
+_SETTINGS_KEY_DISABLED = "disabled_plugins"  # list of plugin directory names
+_SETTINGS_KEY_LOG_LEVEL = "plugin_log_level"  # 'normal', 'verbose', 'quiet'
+_SETTINGS_KEY_SUPPRESS_STARTUP = "suppress_plugin_startup_messages"  # bool
+
+
+def _get_plugin_settings() -> dict:
+    """Ensure plugin settings exist and return them."""
+    if g.settings[_SETTINGS_KEY_DISABLED] is None:
+        g.settings.d[_SETTINGS_KEY_DISABLED] = []
+    if g.settings[_SETTINGS_KEY_LOG_LEVEL] is None:
+        g.settings.d[_SETTINGS_KEY_LOG_LEVEL] = "normal"
+    if g.settings[_SETTINGS_KEY_SUPPRESS_STARTUP] is None:
+        g.settings.d[_SETTINGS_KEY_SUPPRESS_STARTUP] = False
+    return {
+        "disabled": g.settings[_SETTINGS_KEY_DISABLED],
+        "log_level": g.settings[_SETTINGS_KEY_LOG_LEVEL],
+        "suppress_startup": g.settings[_SETTINGS_KEY_SUPPRESS_STARTUP],
+    }
+
+
+def is_plugin_disabled(name: str) -> bool:
+    """Check if a plugin is disabled by its name (or directory name)."""
+    disabled = g.settings[_SETTINGS_KEY_DISABLED]
+    if disabled is None:
+        return False
+    return name in disabled
+
+
+def set_plugin_enabled(name: str, enabled: bool = True) -> None:
+    """Enable or disable a plugin by name. Persisted in settings."""
+    disabled = g.settings[_SETTINGS_KEY_DISABLED]
+    if disabled is None:
+        disabled = []
+    if enabled and name in disabled:
+        disabled.remove(name)
+    elif not enabled and name not in disabled:
+        disabled.append(name)
+    g.settings[_SETTINGS_KEY_DISABLED] = disabled
+
+
+def plugin_log(msg: str, level: str = "info") -> None:
+    """Log a plugin message, respecting the configured log level."""
+    log_level = g.settings[_SETTINGS_KEY_LOG_LEVEL] or "normal"
+    if log_level == "quiet" and level != "error":
+        return
+    if log_level == "normal" and level == "debug":
+        return
+    getattr(logger, level, logger.info)(msg)
+
+
+# ---------------------------------------------------------------------------
+# Plugin output filter -- intercepts print() and logging during plugin imports
+# ---------------------------------------------------------------------------
+
+
+class _NullStream(io.TextIOBase):
+    """A write-only stream that discards everything (like /dev/null)."""
+
+    def write(self, s):
+        return len(s)
+
+    def writelines(self, lines):
+        pass
+
+
+class _LoggedStream(io.TextIOBase):
+    """A stream that routes lines to the flika plugin logger."""
+
+    def __init__(self, plugin_name: str, real_stdout):
+        super().__init__()
+        self._plugin_name = plugin_name
+        self._real_stdout = real_stdout
+        self._buf = ""
+
+    def write(self, s):
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                plugin_log(f"[{self._plugin_name}] {line}", "info")
+        return len(s)
+
+    def flush(self):
+        if self._buf.strip():
+            plugin_log(f"[{self._plugin_name}] {self._buf}", "info")
+            self._buf = ""
+
+
+class _PluginOutputFilter:
+    """Context manager that filters plugin print() and logging output.
+
+    Redirects sys.stdout/stderr instead of replacing builtins.print,
+    which avoids conflicts with libraries like numba that introspect
+    the print builtin.
+    """
+
+    def __init__(self, plugin_name: str = ""):
+        self.plugin_name = plugin_name
+        self._old_stdout = None
+        self._old_stderr = None
+        self._log_filters: list[tuple] = []
+
+    def __enter__(self):
+        settings = _get_plugin_settings()
+        log_level = settings["log_level"]
+        suppress_startup = settings["suppress_startup"]
+
+        # --- Redirect stdout/stderr ---
+        self._old_stdout = sys.stdout
+        self._old_stderr = sys.stderr
+
+        if log_level == "quiet" or suppress_startup:
+            sys.stdout = _NullStream()
+            sys.stderr = _NullStream()
+        elif log_level == "normal":
+            sys.stdout = _LoggedStream(self.plugin_name, self._old_stdout)
+            # Leave stderr visible (warnings/errors should still show)
+
+        # else 'verbose' -- leave everything alone
+
+        # --- Adjust logging threshold for plugin loggers ---
+        if log_level == "quiet":
+            self._raise_logging_threshold(_logging.ERROR)
+        elif log_level == "normal":
+            self._raise_logging_threshold(_logging.WARNING)
+
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Restore stdout/stderr
+        if self._old_stdout is not None:
+            if hasattr(sys.stdout, "flush"):
+                try:
+                    sys.stdout.flush()
+                except Exception:
+                    pass
+            sys.stdout = self._old_stdout
+            self._old_stdout = None
+        if self._old_stderr is not None:
+            sys.stderr = self._old_stderr
+            self._old_stderr = None
+
+        # Remove temporary log filters
+        for handler, filt in self._log_filters:
+            handler.removeFilter(filt)
+        self._log_filters.clear()
+
+        return False  # don't suppress exceptions
+
+    def _raise_logging_threshold(self, min_level: int) -> None:
+        """Add a temporary filter to all root-logger handlers."""
+
+        class _ThresholdFilter(_logging.Filter):
+            def filter(self, record):
+                return record.levelno >= min_level
+
+        filt = _ThresholdFilter()
+        root = _logging.getLogger()
+        for handler in root.handlers:
+            handler.addFilter(filt)
+            self._log_filters.append((handler, filt))
 
 helpHTML = """
 <h1 style="width:100%; text-align:center">Welcome to the flika Plugin Manager</h1>
@@ -53,35 +228,54 @@ def str2func(plugin_name: str, file_location: str, function: str) -> callable:
     """
     takes plugin_name, path to object, function as arguments
     imports plugin_name.path and gets the function from that imported object
-    to be run when an action is clicked
+    to be run when an action is clicked.
+
+    The import is wrapped in _PluginOutputFilter so startup messages are
+    controlled by the configured log level.
     """
+    import functools
+
     try:
         # Try importing through the plugins package first
-        plugin_dir_str = f"plugins.{plugin_name}.{file_location}"
-        __import__(plugin_dir_str)
-        levels = function.split(".")
-        module = __import__(plugin_dir_str, fromlist=[levels[0]]).__dict__[levels[0]]
-        for i in range(1, len(levels)):
-            module = getattr(module, levels[i])
-        return module
+        with _PluginOutputFilter(plugin_name):
+            plugin_dir_str = f"plugins.{plugin_name}.{file_location}"
+            __import__(plugin_dir_str)
+            levels = function.split(".")
+            module = __import__(plugin_dir_str, fromlist=[levels[0]]).__dict__[levels[0]]
+            for i in range(1, len(levels)):
+                module = getattr(module, levels[i])
     except (ImportError, ModuleNotFoundError):
         # If that fails, try direct import (legacy or during installation)
         try:
-            __import__(plugin_name)
-            plugin_dir_str = f"{plugin_name}.{file_location}"
-            levels = function.split(".")
-            module = __import__(plugin_dir_str, fromlist=[levels[0]]).__dict__[
-                levels[0]
-            ]
-            for i in range(1, len(levels)):
-                module = getattr(module, levels[i])
-            return module
+            with _PluginOutputFilter(plugin_name):
+                __import__(plugin_name)
+                plugin_dir_str = f"{plugin_name}.{file_location}"
+                levels = function.split(".")
+                module = __import__(plugin_dir_str, fromlist=[levels[0]]).__dict__[
+                    levels[0]
+                ]
+                for i in range(1, len(levels)):
+                    module = getattr(module, levels[i])
         except (ImportError, ModuleNotFoundError):
             # Module doesn't exist yet, return None
             logger.warning(
                 f"Could not import module {plugin_name}.{file_location} - may not be installed yet"
             )
             return None
+
+    # Wrap the callable so runtime output is also filtered.
+    # Qt's triggered signal passes a `checked` bool -- drop it so
+    # plugin gui() methods (which take no arguments) aren't broken.
+    if callable(module):
+        raw_func = module
+
+        @functools.wraps(raw_func)
+        def _filtered_call(*args, **kwargs):
+            with _PluginOutputFilter(plugin_name):
+                return raw_func()
+
+        return _filtered_call
+    return module
 
 
 def build_submenu(
@@ -432,6 +626,19 @@ class PluginManager(QtWidgets.QMainWindow):
         )
         self.documentationButton.clicked.connect(self.documentationClicked)
         self.updateButton.clicked.connect(self.updateClicked)
+
+        # Enable/disable toggle button (added dynamically since it's not in the .ui)
+        self.enableDisableButton = QtWidgets.QPushButton("Disable")
+        self.enableDisableButton.setVisible(False)
+        self.enableDisableButton.clicked.connect(self.togglePluginEnabled)
+        # Insert next to the download button in its parent layout
+        if self.downloadButton.parentWidget() and self.downloadButton.parentWidget().layout():
+            self.downloadButton.parentWidget().layout().addWidget(
+                self.enableDisableButton
+            )
+        else:
+            # Fallback: add to the same layout area
+            self.enableDisableButton.setParent(self.downloadButton.parentWidget())
         self.searchBox.textChanged.connect(self.showPlugins)
         self.searchButton.clicked.connect(
             lambda f: self.showPlugins(search_str=str(self.searchBox.text()))
@@ -473,6 +680,7 @@ class PluginManager(QtWidgets.QMainWindow):
         self.downloadButton.setVisible(False)
         self.documentationButton.setVisible(False)
         self.updateButton.setVisible(False)
+        self.enableDisableButton.setVisible(False)
         self.infoLabel.setText("")
 
     def downloadClicked(self):
@@ -496,6 +704,33 @@ class PluginManager(QtWidgets.QMainWindow):
         plugin = self.plugins[p]
         PluginManager.removePlugin(plugin)
         PluginManager.downloadPlugin(plugin)
+
+    def togglePluginEnabled(self):
+        """Toggle the enabled/disabled state of the currently selected plugin."""
+        item = self.pluginList.currentItem()
+        if item is None:
+            return
+        p = str(item.text())
+        plugin = self.plugins.get(p)
+        if plugin is None or not plugin.installed:
+            return
+
+        # Use directory name for the disabled list (falls back to plugin name)
+        dir_name = (
+            plugin.plugin_info.directory
+            if plugin.plugin_info and plugin.plugin_info.directory
+            else plugin.name
+        )
+        currently_disabled = is_plugin_disabled(dir_name)
+        set_plugin_enabled(dir_name, enabled=currently_disabled)  # toggle
+
+        action = "enabled" if currently_disabled else "disabled"
+        self.statusBar.showMessage(
+            f"{plugin.name} {action}. Restart flika for changes to take effect."
+        )
+        # Refresh the selected plugin display
+        self.pluginSelected(item)
+        self.showPlugins()
 
     def pluginSelected(self, item):
         logger.debug("Calling app.plugin_manager.PluginManager.pluginSelected()")
@@ -559,9 +794,22 @@ class PluginManager(QtWidgets.QMainWindow):
             info is not None and info.documentation_url is not None
         )
 
-        # Set the icon based on installation status
+        # Enable/disable button -- only visible for installed plugins
+        dir_name = (
+            info.directory if info is not None and info.directory else plugin.name
+        )
+        disabled = is_plugin_disabled(dir_name)
+        self.enableDisableButton.setVisible(plugin.installed)
+        self.enableDisableButton.setText("Enable" if disabled else "Disable")
+
+        if disabled:
+            msg += " [DISABLED]"
+
+        # Set the icon based on installation and enabled status
         if info is None or not plugin.installed:
             plugin.listWidget.setIcon(QtGui.QIcon())
+        elif disabled:
+            plugin.listWidget.setIcon(QtGui.QIcon(image_path("exclamation.png")))
         elif info.version < info.latest_version:
             plugin.listWidget.setIcon(QtGui.QIcon(image_path("exclamation.png")))
         else:
@@ -595,9 +843,16 @@ class PluginManager(QtWidgets.QMainWindow):
             plug = PluginManager.plugins[name]
             info: PluginInfo | None = plug.plugin_info
 
-            # Set the icon based on installation status
+            # Set the icon based on installation and enabled status
+            dir_name = (
+                info.directory
+                if info is not None and info.directory
+                else plug.name
+            )
             if info is None or not plug.installed:
                 plug.listWidget.setIcon(QtGui.QIcon())
+            elif is_plugin_disabled(dir_name):
+                plug.listWidget.setIcon(QtGui.QIcon(image_path("exclamation.png")))
             elif info.version < info.latest_version:
                 plug.listWidget.setIcon(QtGui.QIcon(image_path("exclamation.png")))
             else:
@@ -794,6 +1049,7 @@ def load_local_plugins():
     plugins = {n: Plugin(name=n) for n in plugin_info_urls_by_name}
     installed_plugins = {}
     errors = []
+    disabled = g.settings[_SETTINGS_KEY_DISABLED] or []
 
     for plugin_dir_str in plugin_utils.get_local_plugin_list():
         plugin_info: PluginInfo | FileNotFoundError = (
@@ -801,10 +1057,25 @@ def load_local_plugins():
         )
         if isinstance(plugin_info, FileNotFoundError):
             raise plugin_info
+
+        # Check if this plugin is disabled
+        if plugin_dir_str in disabled:
+            # Still register it but don't load/bind its menu
+            p = Plugin(name=plugin_info.name)
+            p.plugin_info = plugin_info
+            p.installed = True
+            p.menu = None  # Don't create menu for disabled plugin
+            plugins[p.name] = p
+            plugin_log(
+                f"Plugin '{p.name}' is disabled -- skipping menu binding.", "debug"
+            )
+            continue
+
         p = Plugin(name=plugin_info.name)
         p.plugin_info = plugin_info
         try:
-            p.bind_menu_and_methods()
+            with _PluginOutputFilter(plugin_info.name):
+                p.bind_menu_and_methods()
             p.installed = True  # Mark as installed since it was found locally
             # No need to explicitly set p.loaded = True anymore since the property setter handles it
             if p.name not in plugins.keys() or p.name not in installed_plugins:
@@ -815,7 +1086,7 @@ def load_local_plugins():
                 errors.append(error_msg)
                 g.alert(error_msg)
         except Exception:
-            msg = f"Could not load plugin {plugin_dir_str}"  # Fixed variable name from pluginPath to plugin_dir_str
+            msg = f"Could not load plugin {plugin_dir_str}"
             errors.append(msg)
             g.alert(msg)
             logger.error(msg)
