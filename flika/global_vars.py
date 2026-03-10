@@ -269,6 +269,9 @@ def alert(msg, title="flika - Alert"):
     """
 
     print("\nAlert: " + msg)
+    if m is None:
+        logger.warning("alert() called before main window is initialized: %s", msg)
+        return
     msgbx = QtWidgets.QMessageBox(m)
     msgbx.setIcon(QtWidgets.QMessageBox.Information)
     msgbx.setText(msg)

@@ -143,8 +143,10 @@ class BaseProcess(object):
         ):  # if the array is boolean
             newWindow.imageview.setLevels(-0.1, 1.1)
         g.m.statusBar().showMessage("Finished with {}.".format(self.__name__))
-        del self.tif
-        del self.newtif
+        if hasattr(self, "tif"):
+            del self.tif
+        if hasattr(self, "newtif"):
+            del self.newtif
         return newWindow
 
     def gui(self):
@@ -248,5 +250,6 @@ class BaseProcess_noPriorWindow(BaseProcess):
         ):  # if the array is boolean
             newWindow.imageview.setLevels(-0.1, 1.1)
         g.m.statusBar().showMessage("Finished with {}.".format(self.__name__))
-        del self.newtif
+        if hasattr(self, "newtif"):
+            del self.newtif
         return newWindow
