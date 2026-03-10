@@ -6,6 +6,9 @@ Current ROI types are:
     * rectangle
     * freehand
     * rect_line
+    * ellipse
+    * center_surround
+    * point_roi
 
 Example:
     >>> roi = makeROI('line', [[10, 10], [20, 15]])
@@ -73,7 +76,7 @@ class ROI_Drawing(pg.GraphicsObject):
         if self.kind == "freehand":
             if self.pts[-1] != new_pt:
                 self.pts.append(new_pt)
-        elif self.kind in ("line", "rectangle", "rect_line"):
+        elif self.kind in ("line", "rectangle", "rect_line", "ellipse", "center_surround"):
             if len(self.pts) == 1:
                 self.pts.append(new_pt)
             else:
@@ -95,12 +98,14 @@ class ROI_Drawing(pg.GraphicsObject):
             p.drawPolyline(self.pts)
         elif self.kind == "rectangle":
             p.drawRect(self.boundingRect())
+        elif self.kind in ("ellipse", "center_surround"):
+            p.drawEllipse(self.boundingRect())
         elif self.kind in ("rect_line", "line"):
             p.drawLine(*self.pts)
 
     def drawFinished(self):
         self.window.imageview.removeItem(self)
-        if self.kind == "rectangle":
+        if self.kind in ("rectangle", "ellipse", "center_surround"):
             pts = [self.state["pos"], self.state["size"]]
         else:
             pts = self.pts
@@ -147,9 +152,12 @@ class ROI_Base:
         "snapSize": 1,
         "scaleSnap": True,
     }
+    _counter = 0
     # plotSignal = QtCore.Signal()
 
-    def __init__(self, window, pts):
+    def __init__(self, window, pts, name=None):
+        ROI_Base._counter += 1
+        self.name = name or f"{type(self).__name__}_{ROI_Base._counter}"
         self.window = window  #: window.Window: Parent window that this ROI belongs to
         self.colorDialog = QtWidgets.QColorDialog()
         self.colorDialog.colorSelected.connect(self.colorSelected)
@@ -161,11 +169,18 @@ class ROI_Base:
             pts
         )  #: list: Array of points that make up the boundary of the ROI
         self.linkedROIs = set()
+        self._mask_cache = None
+        self._mask_dirty = True
         self.resetSignals()
         self.makeMenu()
         self.pen = pg.mkPen(QtGui.QColor(255, 255, 255))
         self.currentPen = self.pen
         self.mouseHovering = False
+
+    def _invalidate_mask_cache(self):
+        """Mark the mask cache as dirty so getMask() recomputes."""
+        self._mask_dirty = True
+        self._mask_cache = None
 
     def trigger_plot_signal(self):
         pass
@@ -201,6 +216,7 @@ class ROI_Base:
             # Handle sigRegionChanged signal
             if hasattr(self, "sigRegionChanged"):
                 safe_disconnect(self.sigRegionChanged, self.onRegionChange)
+                safe_disconnect(self.sigRegionChanged, self._invalidate_mask_cache)
 
             # Handle sigRegionChangeFinished signal
             if hasattr(self, "sigRegionChangeFinished"):
@@ -215,6 +231,7 @@ class ROI_Base:
         if hasattr(self, "sigRegionChanged"):
             try:
                 self.sigRegionChanged.connect(self.onRegionChange)
+                self.sigRegionChanged.connect(self._invalidate_mask_cache)
                 self._signals_connected = True
             except Exception:
                 pass
@@ -230,6 +247,7 @@ class ROI_Base:
         for roi in self.linkedROIs:
             roi.blockSignals(True)
             roi.draw_from_points(self.pts, finish=False)
+            roi._invalidate_mask_cache()
             if roi.traceWindow is not None:
                 if not finish:
                     roi.traceWindow.translated(roi)
@@ -342,6 +360,44 @@ class ROI_Base:
         self.plotSignal.emit()
         return self.traceWindow
 
+    def _show_measure(self):
+        """Show measurement stats for this ROI in a popup dialog."""
+        s1, s2 = self.getMask()
+        if np.size(s1) == 0:
+            g.alert("ROI mask is empty.")
+            return
+        img = self.window.imageview.getImageItem().image
+        values = img[s1, s2]
+        lines = [
+            f"ROI: {self.name}",
+            f"Type: {self.kind}",
+            "",
+            f"  Pixel count: {len(values)}",
+            f"  Mean: {np.mean(values):.4f}",
+            f"  Std:  {np.std(values):.4f}",
+            f"  Min:  {np.min(values):.4f}",
+            f"  Max:  {np.max(values):.4f}",
+        ]
+        text = "\n".join(lines)
+        QtWidgets.QMessageBox.information(None, "ROI Measurement", text)
+
+    def _show_histogram(self):
+        """Show histogram of pixel values within this ROI."""
+        s1, s2 = self.getMask()
+        if np.size(s1) == 0:
+            g.alert("ROI mask is empty.")
+            return
+        img = self.window.imageview.getImageItem().image
+        values = img[s1, s2].flatten()
+        try:
+            import pyqtgraph as pg
+
+            win = pg.plot(title=f"Histogram - {self.name}")
+            y, x = np.histogram(values, bins=50)
+            win.plot(x, y, stepMode="center", fillLevel=0, brush=(0, 0, 255, 150))
+        except Exception as e:
+            g.alert(f"Could not create histogram: {e}")
+
     def changeColor(self, unused_flag: bool) -> None:
         self.colorDialog.open()
 
@@ -397,6 +453,8 @@ class ROI_Base:
                 self.unplot()
 
         plotAct = QtWidgets.QAction("&Plot", self, triggered=plotPressed)
+        measureAct = QtWidgets.QAction("&Measure", self, triggered=self._show_measure)
+        histogramAct = QtWidgets.QAction("&Histogram", self, triggered=self._show_histogram)
         colorAct = QtWidgets.QAction("&Change Color", self, triggered=self.changeColor)
         copyAct = QtWidgets.QAction("&Copy", self, triggered=self.copy)
         remAct = QtWidgets.QAction("&Delete", self, triggered=self.delete)
@@ -408,6 +466,8 @@ class ROI_Base:
             self.window.menu.aboutToShow.emit()
 
         self.menu.addAction(plotAct)
+        self.menu.addAction(measureAct)
+        self.menu.addAction(histogramAct)
         self.menu.addAction(colorAct)
         self.menu.addAction(copyAct)
         self.menu.addAction(remAct)
@@ -807,6 +867,305 @@ class ROI_freehand(ROI_Base, pg.ROI):
         xx = xx[idx_to_keep]
         yy = yy[idx_to_keep]
         return xx, yy
+
+
+class ROI_ellipse(ROI_Base, pg.EllipseROI):
+    """ROI ellipse class for selecting an elliptical region.
+
+    Extends from :class:`ROI_Base <flika.roi.ROI_Base>` and pyqtgraph.EllipseROI.
+    """
+
+    kind = "ellipse"
+    plotSignal = QtCore.Signal()
+
+    def __init__(self, window, pts, **kargs):
+        roiArgs = self.INITIAL_ARGS.copy()
+        roiArgs.update(kargs)
+        pts = np.array(pts)
+        # pts is [pos, size] -- top-left corner and width/height
+        pos = np.array(pts[0], dtype=int)
+        size = np.array(pts[1], dtype=int)
+        size = np.maximum(size, [1, 1])
+        pg.EllipseROI.__init__(self, pos, size, **roiArgs)
+        ROI_Base.__init__(self, window, [pos, size])
+
+    def getPoints(self) -> jaxtyping.Integer[np.ndarray, "2 2"]:
+        return np.array([self.state["pos"], self.state["size"]], dtype=int)
+
+    def draw_from_points(self, pts, finish=True):
+        self.setPos(pts[0], finish=False)
+        self.setSize(pts[1], finish=False)
+        self.pts = np.array(pts)
+        self.sigRegionChanged.emit(self)
+        if finish:
+            self.sigRegionChangeFinished.emit(self)
+
+    def getMask(self) -> tuple[np.ndarray, np.ndarray]:
+        pos = np.array(self.state["pos"], dtype=float)
+        size = np.array(self.state["size"], dtype=float)
+        center_r = pos[0] + size[0] / 2.0
+        center_c = pos[1] + size[1] / 2.0
+        r_radius = abs(size[0]) / 2.0
+        c_radius = abs(size[1]) / 2.0
+        if r_radius < 0.5 or c_radius < 0.5:
+            return np.array([], dtype=int), np.array([], dtype=int)
+        rr, cc = skimage.draw.ellipse(
+            center_r, center_c, r_radius, c_radius,
+            shape=(self.window.mx, self.window.my),
+        )
+        return rr, cc
+
+
+class ROI_point(ROI_Base, pg.ROI):
+    """Single-point crosshair ROI for sampling a single pixel.
+
+    Extends from :class:`ROI_Base <flika.roi.ROI_Base>` and pyqtgraph.ROI.
+    """
+
+    kind = "point_roi"
+    plotSignal = QtCore.Signal()
+
+    def __init__(self, window, pts, **kargs):
+        roiArgs = self.INITIAL_ARGS.copy()
+        roiArgs.update(kargs)
+        pts = np.array(pts)
+        if pts.ndim == 2:
+            pos = pts[0]
+        else:
+            pos = pts
+        pos = np.array(pos, dtype=int)
+        size = np.array([1, 1])
+        pg.ROI.__init__(self, pos, size, **roiArgs)
+        ROI_Base.__init__(self, window, [pos])
+
+    def paint(self, p: QtGui.QPainter, *args):
+        p.setPen(self.currentPen)
+        cx, cy = 0.5, 0.5
+        arm = 4  # crosshair arm length in pixels
+        p.drawLine(QtCore.QPointF(cx - arm, cy), QtCore.QPointF(cx + arm, cy))
+        p.drawLine(QtCore.QPointF(cx, cy - arm), QtCore.QPointF(cx, cy + arm))
+
+    def getPoints(self) -> jaxtyping.Integer[np.ndarray, "1 2"]:
+        return np.array([self.state["pos"]], dtype=int)
+
+    def draw_from_points(self, pts, finish=True):
+        self.setPos(pts[0], finish=False)
+        self.pts = np.array(pts)
+        self.sigRegionChanged.emit(self)
+        if finish:
+            self.sigRegionChangeFinished.emit(self)
+
+    def getMask(self) -> tuple[np.ndarray, np.ndarray]:
+        x, y = int(self.state["pos"][0]), int(self.state["pos"][1])
+        if 0 <= x < self.window.mx and 0 <= y < self.window.my:
+            return np.array([x]), np.array([y])
+        return np.array([], dtype=int), np.array([], dtype=int)
+
+    def getTrace(
+        self, bounds: list[int] | None = None
+    ) -> jaxtyping.Float[np.ndarray, "t"] | None:
+        """Single pixel time trace."""
+        if self.window.image.ndim == 4 or self.window.metadata["is_rgb"]:
+            g.alert("Plotting trace of RGB movies is not supported.")
+            return None
+        s1, s2 = self.getMask()
+        if np.size(s1) == 0:
+            return np.zeros(self.window.mt, dtype=float)
+        if self.window.image.ndim == 3:
+            trace = self.window.image[:, s1[0], s2[0]]
+        elif self.window.image.ndim == 2:
+            trace = np.array([self.window.image[s1[0], s2[0]]])
+        else:
+            trace = np.zeros(self.window.mt, dtype=float)
+        if bounds:
+            trace = trace[bounds[0] : bounds[1]]
+        return trace
+
+
+class ROI_center_surround(ROI_Base, pg.EllipseROI):
+    """Center-surround ROI with inner and outer concentric regions.
+
+    The outer shape is the main ROI; the inner region is drawn as a dashed overlay.
+    getTrace() returns center_mean - surround_mean for DF-style analysis.
+
+    Attributes:
+        shape_mode (str): 'circle', 'ellipse', or 'square' -- read from settings on creation.
+        inner_ratio (float): inner / outer size ratio (0.05-0.95).
+    """
+
+    kind = "center_surround"
+    plotSignal = QtCore.Signal()
+
+    def __init__(self, window, pts, inner_ratio=None, shape_mode=None, **kargs):
+        roiArgs = self.INITIAL_ARGS.copy()
+        roiArgs.update(kargs)
+        pts = np.array(pts)
+        if pts.shape == (2, 2):
+            pos = pts[0]
+            size = pts[1]
+        else:
+            pos = pts[0]
+            size = np.array([10, 10])
+        pos = np.array(pos, dtype=int)
+        size = np.array(size, dtype=int)
+        size = np.maximum(size, [2, 2])
+
+        # Read defaults from settings
+        self.shape_mode = shape_mode or g.settings.get("cs_shape", "circle") or "circle"
+        self.inner_ratio = (
+            inner_ratio if inner_ratio is not None
+            else (g.settings.get("cs_inner_ratio", 0.5) or 0.5)
+        )
+
+        # For 'circle' or 'square', force equal width/height
+        if self.shape_mode in ("circle", "square"):
+            side = max(size[0], size[1])
+            size = np.array([side, side])
+
+        pg.EllipseROI.__init__(self, pos, size, **roiArgs)
+        ROI_Base.__init__(self, window, [pos, size])
+
+    def _draw_shape(self, p, rect, dashed=False):
+        """Draw one shape (outer or inner) inside *rect* using current shape_mode."""
+        pen = QtGui.QPen(self.currentPen)
+        if dashed:
+            pen.setStyle(QtCore.Qt.DashLine)
+            pw = self.currentPen.widthF()
+            br = self.boundingRect()
+            scale = max(br.width(), 1)
+            pen.setWidthF(pw / scale if pw > 0 else 0)
+        p.setPen(pen)
+        if self.shape_mode == "square":
+            p.drawRect(rect)
+        else:
+            p.drawEllipse(rect)
+
+    def paint(self, p: QtGui.QPainter, *args):
+        r = self.boundingRect()
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        p.scale(r.width(), r.height())
+        unit_r = QtCore.QRectF(r.x() / r.width(), r.y() / r.height(), 1, 1)
+
+        # Outer shape (solid)
+        self._draw_shape(p, unit_r, dashed=False)
+
+        # Inner shape (dashed), concentric
+        cx = unit_r.center().x()
+        cy = unit_r.center().y()
+        iw = unit_r.width() * self.inner_ratio
+        ih = unit_r.height() * self.inner_ratio
+        inner_r = QtCore.QRectF(cx - iw / 2, cy - ih / 2, iw, ih)
+        self._draw_shape(p, inner_r, dashed=True)
+
+    def getPoints(self) -> jaxtyping.Integer[np.ndarray, "2 2"]:
+        return np.array([self.state["pos"], self.state["size"]], dtype=int)
+
+    def draw_from_points(self, pts, finish=True):
+        self.setPos(pts[0], finish=False)
+        self.setSize(pts[1], finish=False)
+        self.pts = np.array(pts)
+        self.sigRegionChanged.emit(self)
+        if finish:
+            self.sigRegionChangeFinished.emit(self)
+
+    def _get_region_mask(self, center_r, center_c, r_radius, c_radius):
+        """Compute pixel mask for the current shape_mode."""
+        shape = (self.window.mx, self.window.my)
+        if r_radius < 0.5 or c_radius < 0.5:
+            return np.array([], dtype=int), np.array([], dtype=int)
+        if self.shape_mode == "square":
+            xmin = max(int(np.floor(center_r - r_radius)), 0)
+            xmax = min(int(np.ceil(center_r + r_radius)), shape[0])
+            ymin = max(int(np.floor(center_c - c_radius)), 0)
+            ymax = min(int(np.ceil(center_c + c_radius)), shape[1])
+            xx, yy = np.meshgrid(
+                np.arange(xmin, xmax, dtype=int),
+                np.arange(ymin, ymax, dtype=int),
+            )
+            return xx.flatten(), yy.flatten()
+        else:
+            return skimage.draw.ellipse(center_r, center_c, r_radius, c_radius, shape=shape)
+
+    def getMask(self) -> tuple[np.ndarray, np.ndarray]:
+        """Full outer region mask."""
+        pos = np.array(self.state["pos"], dtype=float)
+        size = np.array(self.state["size"], dtype=float)
+        cr = pos[0] + size[0] / 2.0
+        cc = pos[1] + size[1] / 2.0
+        return self._get_region_mask(cr, cc, abs(size[0]) / 2.0, abs(size[1]) / 2.0)
+
+    def getCenterMask(self) -> tuple[np.ndarray, np.ndarray]:
+        """Inner region mask."""
+        pos = np.array(self.state["pos"], dtype=float)
+        size = np.array(self.state["size"], dtype=float)
+        cr = pos[0] + size[0] / 2.0
+        cc = pos[1] + size[1] / 2.0
+        return self._get_region_mask(
+            cr, cc,
+            abs(size[0]) / 2.0 * self.inner_ratio,
+            abs(size[1]) / 2.0 * self.inner_ratio,
+        )
+
+    def getSurroundMask(self) -> tuple[np.ndarray, np.ndarray]:
+        """Ring = outer minus inner."""
+        outer = self.getMask()
+        inner = self.getCenterMask()
+        shape = (self.window.mx, self.window.my)
+        outer_mask = np.zeros(shape, dtype=bool)
+        inner_mask = np.zeros(shape, dtype=bool)
+        if np.size(outer[0]) > 0:
+            outer_mask[outer[0], outer[1]] = True
+        if np.size(inner[0]) > 0:
+            inner_mask[inner[0], inner[1]] = True
+        ring = outer_mask & ~inner_mask
+        return np.where(ring)
+
+    def getTrace(
+        self, bounds: list[int] | None = None
+    ) -> jaxtyping.Float[np.ndarray, "t"] | None:
+        """Return center_mean - surround_mean trace (DF-style)."""
+        if self.window.image.ndim == 4 or self.window.metadata["is_rgb"]:
+            g.alert("Plotting trace of RGB movies is not supported.")
+            return None
+        center_s1, center_s2 = self.getCenterMask()
+        surround_s1, surround_s2 = self.getSurroundMask()
+        if np.size(center_s1) == 0 or np.size(surround_s1) == 0:
+            return np.zeros(self.window.mt, dtype=float)
+        if self.window.image.ndim == 3:
+            center_trace = np.mean(self.window.image[:, center_s1, center_s2], axis=1)
+            surround_trace = np.mean(self.window.image[:, surround_s1, surround_s2], axis=1)
+            trace = center_trace - surround_trace
+        elif self.window.image.ndim == 2:
+            c_val = np.mean(self.window.image[center_s1, center_s2])
+            s_val = np.mean(self.window.image[surround_s1, surround_s2])
+            trace = np.array([c_val - s_val])
+        else:
+            trace = np.zeros(self.window.mt, dtype=float)
+        if bounds:
+            trace = trace[bounds[0] : bounds[1]]
+        return trace
+
+    def makeMenu(self):
+        ROI_Base.makeMenu(self)
+
+        def plotCenter():
+            from .tracefig import roiPlot
+
+            orig = self.getMask
+            self.getMask = lambda: self.getCenterMask()
+            self.traceWindow = roiPlot(self)
+            self.getMask = orig
+
+        def plotSurround():
+            from .tracefig import roiPlot
+
+            orig = self.getMask
+            self.getMask = lambda: self.getSurroundMask()
+            self.traceWindow = roiPlot(self)
+            self.getMask = orig
+
+        self.menu.addAction("Plot Center", plotCenter)
+        self.menu.addAction("Plot Surround", plotSurround)
 
 
 class ROI_rect_line(ROI_Base, QtWidgets.QGraphicsObject):
@@ -1244,7 +1603,7 @@ def makeROI(kind, pts, window=None, color=None, **kargs):
     """Create an ROI object in window with the given points
 
     Args:
-        kind (str): one of ['line', 'rectangle', 'freehand', 'rect_line']
+        kind (str): one of ['line', 'rectangle', 'freehand', 'rect_line', 'ellipse', 'center_surround', 'point_roi']
         pts ([N, 2] list of coords): points used to draw the ROI, differs by kind
         window (window.Window): window to draw the ROI in, or currentWindow if not specified
         color (QtGui.QColor): pen color of the new ROI
@@ -1273,6 +1632,12 @@ def makeROI(kind, pts, window=None, color=None, **kargs):
         roi = ROI_line(window, (pts), **kargs)
     elif kind == "rect_line":
         roi = ROI_rect_line(window, pts, **kargs)
+    elif kind == "ellipse":
+        roi = ROI_ellipse(window, pts, **kargs)
+    elif kind == "center_surround":
+        roi = ROI_center_surround(window, pts, **kargs)
+    elif kind == "point_roi":
+        roi = ROI_point(window, pts, **kargs)
     else:
         g.alert("ERROR: THIS KIND OF ROI COULD NOT BE FOUND: {}".format(kind))
         return None
@@ -1290,6 +1655,129 @@ def makeROI(kind, pts, window=None, color=None, **kargs):
     roi.drawFinished()
     roi.setPen(pen)
     return roi
+
+
+def makeROI_from_mask(
+    mask: np.ndarray, window
+) -> "ROI_freehand | None":
+    """Create a freehand ROI from a binary mask image using contour tracing.
+
+    Args:
+        mask (np.ndarray): 2D boolean array
+        window: parent Window
+
+    Returns:
+        ROI_freehand or None
+    """
+    try:
+        from skimage.measure import find_contours
+    except ImportError:
+        g.alert("skimage required for mask-to-ROI conversion")
+        return None
+    contours = find_contours(mask.astype(float), 0.5)
+    if len(contours) == 0:
+        return None
+    # Use the longest contour
+    contour = max(contours, key=len)
+    pts = [(int(round(r)), int(round(c))) for r, c in contour]
+    if len(pts) < 3:
+        return None
+    return makeROI("freehand", pts, window)
+
+
+def transform_roi_mask(
+    roi: ROI_Base,
+    operation: str,
+    pixels: int = 1,
+) -> "ROI_freehand | None":
+    """Apply morphological transform to ROI mask, creating a new freehand ROI.
+
+    Args:
+        roi: source ROI
+        operation: 'enlarge', 'shrink', 'band', or 'convex_hull'
+        pixels: structuring element radius
+
+    Returns:
+        new ROI or None
+    """
+    s1, s2 = roi.getMask()
+    if np.size(s1) == 0:
+        return None
+    shape = (roi.window.mx, roi.window.my)
+    mask = np.zeros(shape, dtype=bool)
+    mask[s1, s2] = True
+
+    if operation == "enlarge":
+        from scipy.ndimage import binary_dilation
+
+        struct = np.ones((2 * pixels + 1, 2 * pixels + 1))
+        new_mask = binary_dilation(mask, struct)
+    elif operation == "shrink":
+        from scipy.ndimage import binary_erosion
+
+        struct = np.ones((2 * pixels + 1, 2 * pixels + 1))
+        new_mask = binary_erosion(mask, struct)
+    elif operation == "band":
+        from scipy.ndimage import binary_dilation
+
+        struct = np.ones((2 * pixels + 1, 2 * pixels + 1))
+        dilated = binary_dilation(mask, struct)
+        new_mask = dilated & ~mask
+    elif operation == "convex_hull":
+        try:
+            from skimage.morphology import convex_hull_image
+
+            new_mask = convex_hull_image(mask)
+        except ImportError:
+            g.alert("skimage required for convex hull")
+            return None
+    else:
+        return None
+
+    if not np.any(new_mask):
+        return None
+    return makeROI_from_mask(new_mask, roi.window)
+
+
+def boolean_roi_op(
+    roi_a: ROI_Base,
+    roi_b: ROI_Base,
+    operation: str = "AND",
+) -> "ROI_freehand | None":
+    """Create a new ROI from boolean combination of two ROI masks.
+
+    Args:
+        roi_a, roi_b: source ROIs (must be in the same window)
+        operation: 'AND', 'OR', 'XOR', or 'SUBTRACT'
+
+    Returns:
+        new freehand ROI or None
+    """
+    s1a, s2a = roi_a.getMask()
+    s1b, s2b = roi_b.getMask()
+    shape = (roi_a.window.mx, roi_a.window.my)
+    mask_a = np.zeros(shape, dtype=bool)
+    mask_b = np.zeros(shape, dtype=bool)
+    if np.size(s1a) > 0:
+        mask_a[s1a, s2a] = True
+    if np.size(s1b) > 0:
+        mask_b[s1b, s2b] = True
+
+    if operation == "AND":
+        result = mask_a & mask_b
+    elif operation == "OR":
+        result = mask_a | mask_b
+    elif operation == "XOR":
+        result = mask_a ^ mask_b
+    elif operation == "SUBTRACT":
+        result = mask_a & ~mask_b
+    else:
+        return None
+
+    if not np.any(result):
+        g.alert("Boolean operation resulted in empty mask")
+        return None
+    return makeROI_from_mask(result, roi_a.window)
 
 
 def open_rois(filename=None):
