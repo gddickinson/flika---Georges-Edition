@@ -118,9 +118,10 @@ class TraceFig(QtWidgets.QWidget):
         self.p1.plotItem.sigRangeChanged.connect(self.updateRegion)
         self.region.setRegion([0, 200])
 
+        self._needs_redraw: bool = False
         self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.p1.update)
-        self.timer.start()
+        self.timer.timeout.connect(self._conditional_update)
+        self.timer.start(16)  # ~60 fps cap instead of 0ms busy loop
 
         from flika.process.measure import measure
 
@@ -142,6 +143,16 @@ class TraceFig(QtWidgets.QWidget):
                 if hasattr(g, "alert"):
                     g.alert(e)
         self.show()
+
+    def _mark_dirty(self) -> None:
+        """Signal slot: schedule a redraw on the next timer tick."""
+        self._needs_redraw = True
+
+    def _conditional_update(self) -> None:
+        """Only repaint when something actually changed."""
+        if self._needs_redraw:
+            self._needs_redraw = False
+            self.p1.update()
 
     def onResize(self, event: QtGui.QResizeEvent) -> None:
         """Handle resize events"""
@@ -280,6 +291,7 @@ class TraceFig(QtWidgets.QWidget):
         """Handle ROI translation and start redraw thread if needed"""
         index = self.get_roi_index(roi)
         self.rois[index]["toBeRedrawn"] = True
+        self._mark_dirty()
         if self.redrawPartialThread is None or self.redrawPartialThread.isFinished():
             self.alert("Launching redrawPartialThread")
             self.redrawPartialThread = RedrawPartialThread(self)
@@ -574,33 +586,53 @@ def roiPlot(roi: ROI_Base) -> TraceFig | None:
 
 
 class RedrawPartialThread(QtCore.QThread):
-    """Thread for redrawing traces in the background"""
+    """Thread for redrawing traces in the background.
+
+    Uses a signal-driven event loop instead of a busy-loop with sleep,
+    so redraws happen immediately when requested without wasting CPU.
+    """
 
     finished = QtCore.Signal()  # this announces that the thread has finished
     finished_sig = QtCore.Signal()  # This tells the thread to finish
     alert = QtCore.Signal(str)
     updated = QtCore.Signal()  # This signal is emitted after each redraw
+    redraw_requested = QtCore.Signal()  # Signal to trigger a redraw from main thread
 
     def __init__(self, tracefig: TraceFig) -> None:
         """Initialize redraw thread for a trace window"""
         super().__init__()
         self.tracefig = tracefig
-        self.redrawCompleted = True
-        self.quit_loop = False
+        self.redrawCompleted: bool = True
+        self.quit_loop: bool = False
+        self._pending: bool = False
 
     def run(self) -> None:
-        """Main thread execution loop"""
+        """Main thread execution loop -- uses Qt event loop instead of busy-wait."""
         self.finished_sig.connect(self.request_quit_loop)
-        while not self.quit_loop:
-            time.sleep(0.05)
-            self.redraw()
-            self.updated.emit()
+        self.redraw_requested.connect(
+            self._on_redraw_requested, QtCore.Qt.QueuedConnection
+        )
+        self.exec()
         self.alert.emit("Finished Redraw")
         self.finished.emit()
 
     def request_quit_loop(self) -> None:
         """Signal thread to exit"""
         self.quit_loop = True
+        self.quit()
+
+    def request_redraw(self) -> None:
+        """Called from the main thread to schedule a redraw."""
+        if not self._pending:
+            self._pending = True
+            self.redraw_requested.emit()
+
+    def _on_redraw_requested(self) -> None:
+        """Handle a redraw request within the thread's event loop."""
+        self._pending = False
+        if not self.quit_loop:
+            self.redraw()
+            self.updated.emit()
 
     def redraw(self) -> None:
         """Redraw ROI traces that need updating"""

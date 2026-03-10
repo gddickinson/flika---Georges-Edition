@@ -3,6 +3,7 @@ Window module for flika - provides the main UI window component.
 """
 
 import os
+import time
 from collections.abc import Callable
 from typing import Any, Optional
 
@@ -116,6 +117,97 @@ class ImageView(pg.ImageView):
         self.ui.roiPlot.setVisible(showRoiPlot)
 
 
+class OrthogonalViewer(QtWidgets.QWidget):
+    """Side panels showing XZ and YZ slices through a 3-D stack.
+
+    Toggled via *View > Orthogonal Views* in the parent :class:`Window`.
+    When the parent has a 4D ``volume``, slices are taken through the Z
+    dimension giving true XZ and YZ cross-sections.
+
+    Hold **C** in the main window to position the slice crosshair.
+    """
+
+    def __init__(self, parent_window: "Window") -> None:
+        super().__init__()
+        self.parent_window: "Window" = parent_window
+        self.setWindowTitle(f"Ortho: {parent_window.name}")
+        layout = QtWidgets.QVBoxLayout(self)
+
+        hint = QtWidgets.QLabel(
+            "Hold C in the image window to position the slice crosshair"
+        )
+        hint.setStyleSheet("color: #888; font-style: italic; padding: 2px;")
+        hint.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(hint)
+
+        views_layout = QtWidgets.QHBoxLayout()
+        self.xz_item: pg.ImageItem = pg.ImageItem()
+        self.yz_item: pg.ImageItem = pg.ImageItem()
+        xz_view = pg.GraphicsLayoutWidget()
+        yz_view = pg.GraphicsLayoutWidget()
+        xz_plot = xz_view.addPlot(title="XZ")
+        yz_plot = yz_view.addPlot(title="YZ")
+        xz_plot.addItem(self.xz_item)
+        yz_plot.addItem(self.yz_item)
+        xz_plot.setAspectLocked(True)
+        yz_plot.setAspectLocked(True)
+
+        views_layout.addWidget(xz_view)
+        views_layout.addWidget(yz_view)
+        layout.addLayout(views_layout)
+        self.resize(600, 320)
+
+        # Initial crosshair position: centre
+        self._y_pos: int = parent_window.my // 2
+        self._x_pos: int = parent_window.mx // 2
+
+        # Connect signals for live updates
+        parent_window.sigTimeChanged.connect(lambda _: self.update_slices())
+        # Connect dimension sliders (Z slider, etc.)
+        for dim_idx, (slider, _label) in parent_window._dim_sliders.items():
+            slider.valueChanged.connect(lambda _: self.update_slices())
+
+        self.update_slices()
+
+    def set_crosshair(self, x: float, y: float) -> None:
+        """Update the slice position from the main view crosshair."""
+        self._x_pos = int(np.clip(x, 0, self.parent_window.mx - 1))
+        self._y_pos = int(np.clip(y, 0, self.parent_window.my - 1))
+        self.update_slices()
+
+    def update_slices(self) -> None:
+        """Recompute and display the XZ and YZ cross-section images."""
+        pw = self.parent_window
+        if pw.metadata.get("is_rgb", False):
+            return
+
+        vol = pw.volume
+        if vol is not None and vol.ndim == 4:
+            # 4D volume: (T, X, Y, Z) -- show true cross-sections through Z
+            t = min(pw.currentIndex, vol.shape[0] - 1)
+            y = min(self._y_pos, vol.shape[2] - 1)
+            x = min(self._x_pos, vol.shape[1] - 1)
+            xz_slice = vol[t, :, y, :]  # shape (X, Z)
+            yz_slice = vol[t, x, :, :]  # shape (Y, Z)
+            self.xz_item.setImage(xz_slice.T)
+            self.yz_item.setImage(yz_slice.T)
+        else:
+            # 3D fallback: (T, X, Y) -- slice through time
+            img = pw.image
+            if img is None or img.ndim < 3:
+                return
+            y = min(self._y_pos, img.shape[2] - 1)
+            x = min(self._x_pos, img.shape[1] - 1)
+            xz_slice = img[:, :, y]  # shape (T, X)
+            yz_slice = img[:, x, :]  # shape (T, Y)
+            self.xz_item.setImage(xz_slice.T)
+            self.yz_item.setImage(yz_slice.T)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self.parent_window._ortho_viewer = None
+        event.accept()
+
+
 class Window(QtWidgets.QWidget):
     """
     Window objects are the central objects in flika. Almost all functions in the
@@ -135,6 +227,9 @@ class Window(QtWidgets.QWidget):
     closeSignal = QtCore.Signal()
     keyPressSignal = QtCore.Signal(QtCore.QEvent)
     sigTimeChanged = QtCore.Signal(int)
+    sigSliceChanged = QtCore.Signal()  # emitted when a Z/C/D4 slider changes the displayed image
+    sigROICreated = QtCore.Signal(object)
+    sigROIRemoved = QtCore.Signal(object)
     gainedFocusSignal = QtCore.Signal()
     lostFocusSignal = QtCore.Signal()
 
@@ -170,6 +265,19 @@ class Window(QtWidgets.QWidget):
         self.framerate: float | None = (
             None  #: float: The number of frames per second (Hz).
         )
+        # Detect lazy arrays and materialize before use
+        try:
+            from .io.lazy import is_lazy
+
+            if is_lazy(tif):
+                self._lazy_source = tif
+                logger.info(f"Materializing {name} ({tif.shape})...")
+                tif = tif.materialize()
+                logger.info(f"{name} loaded.")
+            else:
+                self._lazy_source = None
+        except ImportError:
+            self._lazy_source = None
         self.image: np.ndarray = tif
         self.dtype = (
             tif.dtype
@@ -188,8 +296,25 @@ class Window(QtWidgets.QWidget):
         self.pasteAct = QtWidgets.QAction("&Paste", self, triggered=self.paste)
         self.sigTimeChanged.connect(self.showFrame)
         self._check_for_infinities(tif)
-        self._init_dimensions(tif)
-        self._init_imageview(tif)
+        self._dim_sliders: dict[int, tuple[QtWidgets.QSlider, QtWidgets.QLabel]] = {}
+        self._ortho_viewer: OrthogonalViewer | None = None
+        self._volume_viewer: Any = None
+        self._crosshair_active: bool = False
+        self._crosshair_x_line: pg.InfiniteLine | None = None
+        self._crosshair_y_line: pg.InfiniteLine | None = None
+        self._compositor: Any = None  # ChannelCompositor, set by process/compositing.py
+        self._brushCache: dict[tuple, Any] = {}
+        # Detect RGB before dimension sliders: 4D with last dim <= 4 is RGB
+        if "is_rgb" not in self.metadata:
+            self.metadata["is_rgb"] = tif.ndim == 4 and tif.shape[-1] <= 4
+        self._init_dimension_sliders(tif)
+        # For 4D+ non-RGB data, display only the initial 3D slice
+        display_tif: np.ndarray = tif
+        if self.volume is not None:
+            idx = [slice(None)] * 3 + [0] * (tif.ndim - 3)
+            display_tif = tif[tuple(idx)]
+        self._init_dimensions(display_tif)
+        self._init_imageview(display_tif)
         self.setWindowTitle(name)
         self.normLUT(tif)
         self._init_scatterplot()
@@ -231,6 +356,12 @@ class Window(QtWidgets.QWidget):
         self.setGeometry(geometry)
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.addWidget(self.imageview)
+        for dim_idx in sorted(self._dim_sliders.keys()):
+            slider, label = self._dim_sliders[dim_idx]
+            row = QtWidgets.QHBoxLayout()
+            row.addWidget(label)
+            row.addWidget(slider)
+            self.layout.addLayout(row)
         self.layout.setContentsMargins(0, 0, 0, 0)
         if g.settings["show_windows"]:
             self.show()
@@ -244,6 +375,48 @@ class Window(QtWidgets.QWidget):
                 g.alert("Some array values were inf. Setting those values to 0")
         except MemoryError:
             pass
+
+    def _init_dimension_sliders(self, tif: np.ndarray) -> None:
+        """Add QSliders for extra dimensions beyond 3D (non-RGB).
+
+        For a 4D array that is *not* RGB, we treat dim-0 as time and add sliders
+        for each additional dimension (e.g. Z, C).  The displayed 3-D sub-stack
+        is ``self.volume[t, :, :, slider_index]`` (or similar).
+        """
+        if tif.ndim <= 3 or self.metadata.get("is_rgb", False):
+            return
+        # Store the full volume
+        self.volume = tif
+        dim_names = ["Z", "C", "D4", "D5"]  # fallback labels
+        # Extra dims are everything after (T, X, Y)
+        for i in range(3, tif.ndim):
+            dim_label = dim_names[i - 3] if (i - 3) < len(dim_names) else f"D{i}"
+            slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+            slider.setMinimum(0)
+            slider.setMaximum(tif.shape[i] - 1)
+            slider.setValue(0)
+            slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+            label = QtWidgets.QLabel(f"{dim_label}: 0")
+            slider.valueChanged.connect(
+                lambda val, lbl=label, dl=dim_label: lbl.setText(f"{dl}: {val}")
+            )
+            slider.valueChanged.connect(self._update_displayed_slice)
+            self._dim_sliders[i] = (slider, label)
+
+    def _update_displayed_slice(self) -> None:
+        """Re-slice ``self.volume`` using the current slider positions and update
+        the displayed image."""
+        if self.volume is None:
+            return
+        idx: list = [slice(None)] * 3  # T, X, Y
+        for dim_idx in sorted(self._dim_sliders.keys()):
+            slider, _ = self._dim_sliders[dim_idx]
+            idx.append(slider.value())
+        sub = self.volume[tuple(idx)]
+        self.image = sub
+        self._init_dimensions(sub)
+        self.imageview.setImage(sub, autoLevels=False)
+        self.sigSliceChanged.emit()
 
     def _init_imageview(self, tif: np.ndarray) -> None:
         self.imageview = ImageView(self)
@@ -271,7 +444,7 @@ class Window(QtWidgets.QWidget):
 
     def _init_dimensions(self, tif):
         if "is_rgb" not in self.metadata.keys():
-            self.metadata["is_rgb"] = tif.ndim == 4
+            self.metadata["is_rgb"] = tif.ndim == 4 and tif.shape[-1] <= 4
         self.nDims = len(
             np.shape(tif)
         )  #: int: The number of dimensions of the stored image.
@@ -324,13 +497,17 @@ class Window(QtWidgets.QWidget):
         self.scatterPlot.sigClicked.connect(self.clickedScatter)
         self.imageview.addItem(self.scatterPlot)
 
+    def _getCachedBrush(self, color: QtGui.QColor) -> Any:
+        """Return a cached pg.mkBrush for the given QColor to avoid recreating brushes."""
+        rgba = color.getRgb()
+        brush = self._brushCache.get(rgba)
+        if brush is None:
+            brush = pg.mkBrush(*rgba)
+            self._brushCache[rgba] = brush
+        return brush
+
     def _init_menu(self):
         self.menu = QtWidgets.QMenu(self)
-
-        def updateMenu():
-            from .roi import ROI_Base
-
-            pasteAct.setEnabled(isinstance(g.clipboard, (list, ROI_Base)))
 
         pasteAct = QtWidgets.QAction("&Paste", self, triggered=self.paste)
         plotAllAct = QtWidgets.QAction(
@@ -344,10 +521,42 @@ class Window(QtWidgets.QWidget):
         removeAll = QtWidgets.QAction(
             "Remove All ROIs", self.menu, triggered=self.removeAllROIs
         )
+        orthoAct = QtWidgets.QAction(
+            "Orthogonal Views", self.menu, triggered=self.toggleOrthogonalViews
+        )
+        volumeAct = QtWidgets.QAction(
+            "3D Volume Viewer", self.menu, triggered=self.toggleVolumeViewer
+        )
+        roiMgrAct = QtWidgets.QAction(
+            "ROI Manager", self.menu, triggered=self._open_roi_manager
+        )
+        snapshotAct = QtWidgets.QAction(
+            "Snapshot to Desktop", self.menu, triggered=self.snapshot
+        )
+
         self.menu.addAction(pasteAct)
         self.menu.addAction(plotAllAct)
         self.menu.addAction(copyAll)
         self.menu.addAction(removeAll)
+        self.menu.addSeparator()
+        self.menu.addAction(orthoAct)
+        self.menu.addAction(volumeAct)
+        self.menu.addSeparator()
+        self.menu.addAction(roiMgrAct)
+        self.menu.addAction(snapshotAct)
+
+        def updateMenu():
+            from .roi import ROI_Base
+
+            pasteAct.setEnabled(isinstance(g.clipboard, (list, ROI_Base)))
+            ndims = self.nDims
+            is_rgb = self.metadata.get("is_rgb", False)
+            has_time = ndims >= 3 and not is_rgb
+            has_volume = self.volume is not None
+            plotAllAct.setVisible(has_time or has_volume)
+            orthoAct.setVisible(ndims >= 3 and not is_rgb)
+            volumeAct.setVisible(has_volume)
+
         self.menu.aboutToShow.connect(updateMenu)
 
     def onResize(self, event: QtGui.QResizeEvent) -> None:
@@ -356,6 +565,48 @@ class Window(QtWidgets.QWidget):
 
     def onMove(self, event: QtGui.QMoveEvent) -> None:
         g.settings["window_settings"]["coords"] = self.geometry().getRect()
+
+    def snapshot(self) -> None:
+        """Save a screenshot of the image view (including ROIs and overlays) to the Desktop."""
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        base = self.name.replace(" ", "_").replace("/", "_")
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(desktop, f"{base}_{timestamp}.png")
+        # Grab the graphics view which contains the image, ROIs, and all overlays
+        pixmap = self.imageview.ui.graphicsView.grab()
+        pixmap.save(filepath)
+        if hasattr(g, "m") and g.m is not None and hasattr(g.m, "statusBar"):
+            g.m.statusBar().showMessage(f"Snapshot saved to {filepath}")
+
+    def _open_roi_manager(self) -> None:
+        """Open the ROI Manager panel from the main application."""
+        if g.m is not None and hasattr(g.m, "_toggle_roi_manager"):
+            g.m._toggle_roi_manager()
+
+    def toggleOrthogonalViews(self) -> None:
+        """Toggle the XZ/YZ orthogonal-view panel."""
+        if self._ortho_viewer is not None:
+            self._ortho_viewer.close()
+            self._ortho_viewer = None
+        else:
+            if self.image.ndim >= 3 and not self.metadata.get("is_rgb", False):
+                self._ortho_viewer = OrthogonalViewer(self)
+                self._ortho_viewer.show()
+
+    def toggleVolumeViewer(self) -> None:
+        """Toggle the 3D volume viewer (only for 4D windows)."""
+        if self._volume_viewer is not None:
+            self._volume_viewer.close()
+            self._volume_viewer = None
+        else:
+            if self.volume is not None:
+                try:
+                    from .viewers.volume_viewer import VolumeViewer
+
+                    self._volume_viewer = VolumeViewer(self)
+                    self._volume_viewer.show()
+                except ImportError as e:
+                    g.alert(str(e))
 
     def save(self, filename: str) -> None:
         """save(self, filename)
@@ -578,6 +829,12 @@ class Window(QtWidgets.QWidget):
             print(f"Attempt to close window {self} that was already closed")
             event.accept()
         else:
+            if self._compositor is not None:
+                try:
+                    self._compositor.cleanup()
+                except Exception:
+                    pass
+                self._compositor = None
             self.closeSignal.emit()
             for win in list(self.linkedWindows):
                 self.unlink(win)
@@ -788,6 +1045,9 @@ class Window(QtWidgets.QWidget):
             mm = g.settings["mousemode"]
             if mm == "point":
                 self.addPoint()
+            elif mm == "point_roi":
+                pts = [pg.Point(round(self.x), round(self.y))]
+                self.currentROI = makeROI("point_roi", pts, self)
             elif mm == "rectangle" and g.settings["default_roi_on_click"]:
                 pts = [
                     pg.Point(
@@ -835,7 +1095,61 @@ class Window(QtWidgets.QWidget):
         # Add cmd+w (or ctrl+w on other platforms) to close window
         elif ev.key() == QtCore.Qt.Key_W and ev.modifiers() & QtCore.Qt.ControlModifier:
             self.close()
+        elif ev.key() == QtCore.Qt.Key_C and not ev.isAutoRepeat():
+            if self._ortho_viewer is not None or self._volume_viewer is not None:
+                self._crosshair_active = True
+                self._show_crosshair_lines()
+                # Immediately update to current mouse position
+                if self.x is not None and self.y is not None:
+                    self._update_crosshair_lines(self.x, self.y)
+                    if self._ortho_viewer is not None:
+                        self._ortho_viewer.set_crosshair(self.x, self.y)
+                    if self._volume_viewer is not None:
+                        self._volume_viewer.set_crosshair(self.x, self.y)
         self.keyPressSignal.emit(ev)
+
+    def keyReleaseEvent(self, ev: QtGui.QKeyEvent) -> None:
+        if ev.key() == QtCore.Qt.Key_C and not ev.isAutoRepeat():
+            self._crosshair_active = False
+            self._hide_crosshair_lines()
+
+    def _show_crosshair_lines(self) -> None:
+        """Add coloured crosshair lines to the image view."""
+        view = self.imageview.view
+        if self._crosshair_x_line is None:
+            self._crosshair_x_line = pg.InfiniteLine(
+                pos=self.mx // 2,
+                angle=90,
+                pen=pg.mkPen("c", width=1, style=QtCore.Qt.DashLine),
+            )
+            self._crosshair_y_line = pg.InfiniteLine(
+                pos=self.my // 2,
+                angle=0,
+                pen=pg.mkPen("m", width=1, style=QtCore.Qt.DashLine),
+            )
+        view.addItem(self._crosshair_x_line)
+        view.addItem(self._crosshair_y_line)
+
+    def _hide_crosshair_lines(self) -> None:
+        """Remove crosshair lines from the image view."""
+        view = self.imageview.view
+        if self._crosshair_x_line is not None:
+            try:
+                view.removeItem(self._crosshair_x_line)
+            except Exception:
+                pass
+        if self._crosshair_y_line is not None:
+            try:
+                view.removeItem(self._crosshair_y_line)
+            except Exception:
+                pass
+
+    def _update_crosshair_lines(self, x: float, y: float) -> None:
+        """Move crosshair overlay lines to (x, y)."""
+        if self._crosshair_x_line is not None:
+            self._crosshair_x_line.setValue(x)
+        if self._crosshair_y_line is not None:
+            self._crosshair_y_line.setValue(y)
 
     def mouseMoved(self, point):
         """mouseMoved(self,point)
@@ -859,6 +1173,13 @@ class Window(QtWidgets.QWidget):
             g.m.statusBar().showMessage(
                 "x={}, y={}, z={}, value={}".format(int(self.x), int(self.y), z, value)
             )
+            # Only forward crosshair when crosshair mode is active (hold C)
+            if self._crosshair_active:
+                self._update_crosshair_lines(self.x, self.y)
+                if self._ortho_viewer is not None:
+                    self._ortho_viewer.set_crosshair(self.x, self.y)
+                if self._volume_viewer is not None:
+                    self._volume_viewer.set_crosshair(self.x, self.y)
 
     def mouseDragEvent(self, ev: Any) -> None:
         modifiers = QtWidgets.QApplication.keyboardModifiers()
@@ -903,7 +1224,7 @@ class Window(QtWidgets.QWidget):
         if ev.button() == QtCore.Qt.RightButton:
             ev.accept()
             mm = g.settings["mousemode"]
-            if mm in ("freehand", "line", "rectangle", "rect_line"):
+            if mm in ("freehand", "line", "rectangle", "rect_line", "ellipse", "center_surround"):
                 if ev.isStart():
                     self.ev = ev
                     pt = self.imageview.getImageItem().mapFromScene(
@@ -1013,3 +1334,12 @@ def get_line(x1: int, y1: int, x2: int, y2: int) -> np.ndarray:
     if swapped:
         points.reverse()
     return np.array(points)
+
+
+# Add array interoperability protocols to Window class
+try:
+    from flika.interop.array_protocol import add_array_protocol
+
+    add_array_protocol(Window)
+except ImportError:
+    pass  # interop module not yet available
