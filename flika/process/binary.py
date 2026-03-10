@@ -6,7 +6,7 @@ import jaxtyping
 import numpy as np
 import scipy
 import scipy.ndimage
-from qtpy import QtWidgets
+from qtpy import QtGui, QtWidgets
 from skimage import feature, measure
 from skimage.filters.thresholding import threshold_local
 from skimage.morphology import remove_small_objects
@@ -14,6 +14,7 @@ from skimage.morphology import remove_small_objects
 # Local application imports
 import flika.window
 from flika import global_vars as g
+from flika.utils.ndim import per_plane
 from flika.roi import ROI_Drawing, makeROI
 from flika.utils.BaseProcess import BaseProcess
 from flika.utils.custom_widgets import (
@@ -33,6 +34,18 @@ __all__ = [
     "binary_erosion",
     "generate_rois",
     "canny_edge_detector",
+    "analyze_particles",
+    "grayscale_opening",
+    "grayscale_closing",
+    "morphological_gradient",
+    "h_maxima",
+    "h_minima",
+    "area_opening",
+    "area_closing",
+    "remove_small_holes",
+    "flood_fill_process",
+    "hysteresis_threshold",
+    "multi_otsu_threshold",
 ]
 
 
@@ -761,3 +774,827 @@ class Generate_ROIs(BaseProcess):
 
 
 generate_rois = Generate_ROIs()
+
+
+class Analyze_Particles(BaseProcess):
+    """Analyzes connected components in a binary image.
+
+    Labels each connected region and computes properties such as area,
+    centroid, bounding box, eccentricity, and mean intensity.
+
+    Parameters:
+        min_area (int): Minimum area (in pixels) for a particle to be kept
+        max_area (int): Maximum area (0 means no limit)
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the labeled particle image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        min_area = QtWidgets.QSpinBox()
+        min_area.setRange(1, 100000)
+        min_area.setValue(1)
+
+        max_area = QtWidgets.QSpinBox()
+        max_area.setRange(0, 10000000)
+        max_area.setValue(0)
+
+        self.items.append(
+            {"name": "min_area", "string": "Min Area (pixels)", "object": min_area}
+        )
+        self.items.append(
+            {"name": "max_area", "string": "Max Area (0=no limit)", "object": max_area}
+        )
+        super().gui()
+
+    def __call__(
+        self,
+        min_area: int = 1,
+        max_area: int = 0,
+        keepSourceWindow: bool = False,
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        tif = self.tif
+
+        if tif.ndim == 2:
+            labelled, particles = self._analyze_frame(tif, min_area, max_area, None)
+            self.newtif = labelled.astype(np.float64)
+        elif tif.ndim == 3:
+            use_parallel = g.settings.get("multiprocessing", True) and tif.shape[0] > 4
+            if use_parallel:
+                from concurrent.futures import ThreadPoolExecutor
+
+                n_workers = g.settings.get("nCores", 4)
+
+                def analyze_t(t):
+                    return t, self._analyze_frame(
+                        tif[t], min_area, max_area, tif[t]
+                    )
+
+                with ThreadPoolExecutor(max_workers=n_workers) as executor:
+                    frame_results = list(
+                        executor.map(analyze_t, range(tif.shape[0]))
+                    )
+                all_particles = []
+                result = np.zeros_like(tif, dtype=np.float64)
+                for t, (labelled, particles) in frame_results:
+                    result[t] = labelled.astype(np.float64)
+                    for p in particles:
+                        p["frame"] = t
+                    all_particles.extend(particles)
+            else:
+                all_particles = []
+                result = np.zeros_like(tif, dtype=np.float64)
+                for t in range(tif.shape[0]):
+                    labelled, particles = self._analyze_frame(
+                        tif[t], min_area, max_area, tif[t]
+                    )
+                    result[t] = labelled.astype(np.float64)
+                    for p in particles:
+                        p["frame"] = t
+                    all_particles.extend(particles)
+            self.newtif = result
+            particles = all_particles
+        else:
+            g.alert("Analyze particles requires 2D or 3D binary images")
+            return None
+
+        self.newname = f"{self.oldname} - Particles"
+        w = self.end()
+        if w is not None:
+            w.metadata["particles"] = particles
+            n = len(particles)
+            g.m.statusBar().showMessage(f"Found {n} particles")
+        return w
+
+    @staticmethod
+    def _analyze_frame(
+        binary_frame: np.ndarray,
+        min_area: int,
+        max_area: int,
+        intensity_frame: np.ndarray | None,
+    ) -> tuple[np.ndarray, list[dict]]:
+        labelled = measure.label(binary_frame.astype(bool))
+        regions = measure.regionprops(labelled, intensity_image=intensity_frame)
+        particles = []
+        filtered_label = np.zeros_like(labelled)
+        new_id = 1
+
+        for props in regions:
+            area = props.area
+            if area < min_area:
+                continue
+            if max_area > 0 and area > max_area:
+                continue
+            p = {
+                "label": new_id,
+                "area": int(area),
+                "centroid": tuple(float(c) for c in props.centroid),
+                "bbox": props.bbox,
+                "eccentricity": (
+                    float(props.eccentricity)
+                    if hasattr(props, "eccentricity")
+                    else 0.0
+                ),
+            }
+            if intensity_frame is not None:
+                p["mean_intensity"] = float(props.mean_intensity)
+            filtered_label[labelled == props.label] = new_id
+            particles.append(p)
+            new_id += 1
+
+        return filtered_label, particles
+
+
+analyze_particles = Analyze_Particles()
+
+
+@per_plane
+def _grayscale_opening_impl(
+    tif: np.ndarray, size: int
+) -> np.ndarray:
+    if tif.ndim == 2:
+        return scipy.ndimage.grey_opening(tif, size=(size, size))
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = scipy.ndimage.grey_opening(tif[i], size=(size, size))
+        return result
+
+
+class Grayscale_Opening(BaseProcess):
+    """Performs a grayscale morphological opening.
+
+    Uses scipy.ndimage.grey_opening to remove bright structures smaller
+    than the footprint.
+
+    Parameters:
+        size (int): Size of the 2D footprint (must be odd)
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the opened image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        size = BlocksizeSlider(0)
+        size.setRange(3, 51)
+        size.setValue(3)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({"name": "size", "string": "Size", "object": size})
+        self.items.append({"name": "preview", "string": "Preview", "object": preview})
+        super().gui()
+        self.preview()
+
+    def __call__(
+        self, size: int, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        self.newtif = _grayscale_opening_impl(np.copy(self.tif), size)
+        self.newname = f"{self.oldname} - Grayscale Opening {size}"
+        return self.end()
+
+    def preview(self) -> None:
+        if g.win is None or g.win.closed:
+            return
+        win = g.win
+        size = self.getValue("size")
+        preview = self.getValue("preview")
+        if preview:
+            if win.nDims == 3:
+                testimage = np.copy(win.image[win.currentIndex])
+            elif win.nDims == 2:
+                testimage = np.copy(win.image)
+            testimage = scipy.ndimage.grey_opening(testimage, size=(size, size))
+            win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            win.reset()
+
+
+grayscale_opening = Grayscale_Opening()
+
+
+@per_plane
+def _grayscale_closing_impl(
+    tif: np.ndarray, size: int
+) -> np.ndarray:
+    if tif.ndim == 2:
+        return scipy.ndimage.grey_closing(tif, size=(size, size))
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = scipy.ndimage.grey_closing(tif[i], size=(size, size))
+        return result
+
+
+class Grayscale_Closing(BaseProcess):
+    """Performs a grayscale morphological closing.
+
+    Uses scipy.ndimage.grey_closing to fill dark structures smaller
+    than the footprint.
+
+    Parameters:
+        size (int): Size of the 2D footprint (must be odd)
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the closed image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        size = BlocksizeSlider(0)
+        size.setRange(3, 51)
+        size.setValue(3)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({"name": "size", "string": "Size", "object": size})
+        self.items.append({"name": "preview", "string": "Preview", "object": preview})
+        super().gui()
+        self.preview()
+
+    def __call__(
+        self, size: int, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        self.newtif = _grayscale_closing_impl(np.copy(self.tif), size)
+        self.newname = f"{self.oldname} - Grayscale Closing {size}"
+        return self.end()
+
+    def preview(self) -> None:
+        if g.win is None or g.win.closed:
+            return
+        win = g.win
+        size = self.getValue("size")
+        preview = self.getValue("preview")
+        if preview:
+            if win.nDims == 3:
+                testimage = np.copy(win.image[win.currentIndex])
+            elif win.nDims == 2:
+                testimage = np.copy(win.image)
+            testimage = scipy.ndimage.grey_closing(testimage, size=(size, size))
+            win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            win.reset()
+
+
+grayscale_closing = Grayscale_Closing()
+
+
+@per_plane
+def _morphological_gradient_impl(
+    tif: np.ndarray, size: int
+) -> np.ndarray:
+    if tif.ndim == 2:
+        return scipy.ndimage.morphological_gradient(tif, size=(size, size))
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = scipy.ndimage.morphological_gradient(
+                tif[i], size=(size, size)
+            )
+        return result
+
+
+class Morphological_Gradient(BaseProcess):
+    """Computes the morphological gradient (dilation minus erosion).
+
+    Uses scipy.ndimage.morphological_gradient to highlight edges.
+
+    Parameters:
+        size (int): Size of the 2D footprint (must be odd)
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the gradient image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        size = BlocksizeSlider(0)
+        size.setRange(3, 51)
+        size.setValue(3)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({"name": "size", "string": "Size", "object": size})
+        self.items.append({"name": "preview", "string": "Preview", "object": preview})
+        super().gui()
+        self.preview()
+
+    def __call__(
+        self, size: int, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        self.newtif = _morphological_gradient_impl(np.copy(self.tif), size)
+        self.newname = f"{self.oldname} - Morphological Gradient {size}"
+        return self.end()
+
+    def preview(self) -> None:
+        if g.win is None or g.win.closed:
+            return
+        win = g.win
+        size = self.getValue("size")
+        preview = self.getValue("preview")
+        if preview:
+            if win.nDims == 3:
+                testimage = np.copy(win.image[win.currentIndex])
+            elif win.nDims == 2:
+                testimage = np.copy(win.image)
+            testimage = scipy.ndimage.morphological_gradient(
+                testimage, size=(size, size)
+            )
+            win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            win.reset()
+
+
+morphological_gradient = Morphological_Gradient()
+
+
+@per_plane
+def _h_maxima_impl(tif: np.ndarray, h: float) -> np.ndarray:
+    from skimage.morphology import h_maxima as _h_maxima
+
+    if tif.ndim == 2:
+        return _h_maxima(tif, h)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = _h_maxima(tif[i], h)
+        return result
+
+
+class H_Maxima(BaseProcess):
+    """Determines all maxima of the image with depth >= h.
+
+    Uses skimage.morphology.h_maxima.
+
+    Parameters:
+        h (float): Minimum depth of maxima
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the h-maxima image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        h = SliderLabel(2)
+        h.setRange(0.1, 1000)
+        h.setValue(1)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append({"name": "h", "string": "H", "object": h})
+        self.items.append({"name": "preview", "string": "Preview", "object": preview})
+        super().gui()
+        self.preview()
+
+    def __call__(
+        self, h: float, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        self.newtif = _h_maxima_impl(np.copy(self.tif), h)
+        self.newname = f"{self.oldname} - H Maxima {h}"
+        return self.end()
+
+    def preview(self) -> None:
+        if g.win is None or g.win.closed:
+            return
+        win = g.win
+        from skimage.morphology import h_maxima as _h_maxima
+
+        h = self.getValue("h")
+        preview = self.getValue("preview")
+        if preview:
+            if win.nDims == 3:
+                testimage = np.copy(win.image[win.currentIndex])
+            elif win.nDims == 2:
+                testimage = np.copy(win.image)
+            testimage = _h_maxima(testimage, h)
+            win.imageview.setImage(testimage, autoLevels=False)
+        else:
+            win.reset()
+
+
+h_maxima = H_Maxima()
+
+
+@per_plane
+def _h_minima_impl(tif: np.ndarray, h: float) -> np.ndarray:
+    from skimage.morphology import h_minima as _h_minima
+
+    if tif.ndim == 2:
+        return _h_minima(tif, h)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = _h_minima(tif[i], h)
+        return result
+
+
+class H_Minima(BaseProcess):
+    """Determines all minima of the image with depth >= h.
+
+    Uses skimage.morphology.h_minima.
+
+    Parameters:
+        h (float): Minimum depth of minima
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the h-minima image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        h = SliderLabel(2)
+        h.setRange(0.1, 1000)
+        h.setValue(1)
+        self.items.append({"name": "h", "string": "H", "object": h})
+        super().gui()
+
+    def __call__(
+        self, h: float, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        self.newtif = _h_minima_impl(np.copy(self.tif), h)
+        self.newname = f"{self.oldname} - H Minima {h}"
+        return self.end()
+
+
+h_minima = H_Minima()
+
+
+@per_plane
+def _area_opening_impl(
+    tif: np.ndarray, area_threshold: int
+) -> np.ndarray:
+    from skimage.morphology import area_opening as _area_opening
+
+    if tif.ndim == 2:
+        return _area_opening(tif, area_threshold)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = _area_opening(tif[i], area_threshold)
+        return result
+
+
+class Area_Opening(BaseProcess):
+    """Performs an area opening on a grayscale image.
+
+    Removes all bright structures smaller than area_threshold using
+    skimage.morphology.area_opening.
+
+    Parameters:
+        area_threshold (int): Minimum area (in pixels) of structures to keep
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the area-opened image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        area_threshold = SliderLabel(0)
+        area_threshold.setRange(1, 100000)
+        area_threshold.setValue(64)
+        self.items.append(
+            {
+                "name": "area_threshold",
+                "string": "Area Threshold",
+                "object": area_threshold,
+            }
+        )
+        super().gui()
+
+    def __call__(
+        self, area_threshold: int, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        self.newtif = _area_opening_impl(np.copy(self.tif), area_threshold)
+        self.newname = f"{self.oldname} - Area Opening {area_threshold}"
+        return self.end()
+
+
+area_opening = Area_Opening()
+
+
+@per_plane
+def _area_closing_impl(
+    tif: np.ndarray, area_threshold: int
+) -> np.ndarray:
+    from skimage.morphology import area_closing as _area_closing
+
+    if tif.ndim == 2:
+        return _area_closing(tif, area_threshold)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape)
+        for i in range(len(tif)):
+            result[i] = _area_closing(tif[i], area_threshold)
+        return result
+
+
+class Area_Closing(BaseProcess):
+    """Performs an area closing on a grayscale image.
+
+    Removes all dark structures smaller than area_threshold using
+    skimage.morphology.area_closing.
+
+    Parameters:
+        area_threshold (int): Minimum area (in pixels) of structures to fill
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the area-closed image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        area_threshold = SliderLabel(0)
+        area_threshold.setRange(1, 100000)
+        area_threshold.setValue(64)
+        self.items.append(
+            {
+                "name": "area_threshold",
+                "string": "Area Threshold",
+                "object": area_threshold,
+            }
+        )
+        super().gui()
+
+    def __call__(
+        self, area_threshold: int, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        self.newtif = _area_closing_impl(np.copy(self.tif), area_threshold)
+        self.newname = f"{self.oldname} - Area Closing {area_threshold}"
+        return self.end()
+
+
+area_closing = Area_Closing()
+
+
+@per_plane
+def _remove_small_holes_impl(
+    tif: np.ndarray, max_size: int
+) -> np.ndarray:
+    from skimage.morphology import remove_small_holes as _remove_small_holes
+
+    if tif.ndim == 2:
+        return _remove_small_holes(tif.astype(bool), max_size).astype(np.uint8)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape, dtype=np.uint8)
+        for i in range(len(tif)):
+            result[i] = _remove_small_holes(tif[i].astype(bool), max_size).astype(
+                np.uint8
+            )
+        return result
+
+
+class Remove_Small_Holes(BaseProcess):
+    """Removes small holes from a binary image.
+
+    Uses skimage.morphology.remove_small_holes.
+
+    Parameters:
+        max_size (int): Maximum area (in pixels) of holes to remove
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with small holes removed
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        max_size = SliderLabel(0)
+        max_size.setRange(1, 100000)
+        max_size.setValue(64)
+        self.items.append(
+            {"name": "max_size", "string": "Max Hole Size", "object": max_size}
+        )
+        super().gui()
+
+    def __call__(
+        self, max_size: int, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        self.newtif = _remove_small_holes_impl(np.copy(self.tif), max_size)
+        self.newname = f"{self.oldname} - Remove Small Holes {max_size}"
+        return self.end()
+
+
+remove_small_holes = Remove_Small_Holes()
+
+
+class Flood_Fill_Process(BaseProcess):
+    """Performs a flood fill starting from the current cursor position.
+
+    Uses skimage.morphology.flood_fill.
+
+    Parameters:
+        tolerance (float): Tolerance for the fill (pixels within this range
+            of the seed value are filled)
+        new_value (float): The value to fill with
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the flood-filled image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        tolerance = SliderLabel(2)
+        tolerance.setRange(0, 1000)
+        tolerance.setValue(10)
+        new_value = SliderLabel(2)
+        new_value.setRange(-10000, 10000)
+        new_value.setValue(0)
+        self.items.append(
+            {"name": "tolerance", "string": "Tolerance", "object": tolerance}
+        )
+        self.items.append(
+            {"name": "new_value", "string": "New Value", "object": new_value}
+        )
+        super().gui()
+
+    def __call__(
+        self,
+        tolerance: float,
+        new_value: float,
+        keepSourceWindow: bool = False,
+    ) -> flika.window.Window | None:
+        from skimage.morphology import flood_fill as _flood_fill
+
+        self.start(keepSourceWindow)
+        win = self.oldwindow
+        # Get seed point from the current cursor position
+        view = win.imageview.getView()
+        mouse_point = view.mapSceneToView(
+            view.mapFromGlobal(QtGui.QCursor.pos())
+        )
+        x = int(mouse_point.x())
+        y = int(mouse_point.y())
+        tif = np.copy(self.tif)
+        if tif.ndim == 2:
+            y = np.clip(y, 0, tif.shape[0] - 1)
+            x = np.clip(x, 0, tif.shape[1] - 1)
+            tif = _flood_fill(tif, (y, x), new_value, tolerance=tolerance)
+        elif tif.ndim == 3:
+            idx = win.currentIndex
+            y = np.clip(y, 0, tif.shape[1] - 1)
+            x = np.clip(x, 0, tif.shape[2] - 1)
+            tif[idx] = _flood_fill(
+                tif[idx], (y, x), new_value, tolerance=tolerance
+            )
+        self.newtif = tif
+        self.newname = f"{self.oldname} - Flood Fill"
+        return self.end()
+
+
+flood_fill_process = Flood_Fill_Process()
+
+
+@per_plane
+def _hysteresis_threshold_impl(
+    tif: np.ndarray, low: float, high: float
+) -> np.ndarray:
+    from skimage.filters import apply_hysteresis_threshold
+
+    if tif.ndim == 2:
+        return apply_hysteresis_threshold(tif, low, high).astype(np.uint8)
+    elif tif.ndim == 3:
+        result = np.zeros(tif.shape, dtype=np.uint8)
+        for i in range(len(tif)):
+            result[i] = apply_hysteresis_threshold(tif[i], low, high).astype(
+                np.uint8
+            )
+        return result
+
+
+class Hysteresis_Threshold(BaseProcess):
+    """Applies hysteresis thresholding.
+
+    Uses skimage.filters.apply_hysteresis_threshold. Pixels above ``high``
+    are marked True; pixels between ``low`` and ``high`` are marked True
+    only if connected to pixels above ``high``.
+
+    Parameters:
+        low (float): Lower threshold
+        high (float): Upper threshold
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the hysteresis-thresholded image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        low = SliderLabel(2)
+        high = SliderLabel(2)
+        if g.win is not None:
+            image = g.win.image
+            low.setRange(np.min(image), np.max(image))
+            low.setValue(np.min(image))
+            high.setRange(np.min(image), np.max(image))
+            high.setValue(np.mean(image))
+        else:
+            low.setRange(0, 10000)
+            low.setValue(0)
+            high.setRange(0, 10000)
+            high.setValue(100)
+        preview = CheckBox()
+        preview.setChecked(True)
+        self.items.append(
+            {"name": "low", "string": "Low Threshold", "object": low}
+        )
+        self.items.append(
+            {"name": "high", "string": "High Threshold", "object": high}
+        )
+        self.items.append({"name": "preview", "string": "Preview", "object": preview})
+        super().gui()
+        self.preview()
+
+    def __call__(
+        self, low: float, high: float, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        self.start(keepSourceWindow)
+        self.newtif = _hysteresis_threshold_impl(np.copy(self.tif), low, high)
+        self.newname = f"{self.oldname} - Hysteresis Threshold"
+        return self.end()
+
+    def preview(self) -> None:
+        if g.win is None or g.win.closed:
+            return
+        win = g.win
+        from skimage.filters import apply_hysteresis_threshold
+
+        low = self.getValue("low")
+        high = self.getValue("high")
+        preview = self.getValue("preview")
+        if preview:
+            if win.nDims == 3:
+                testimage = np.copy(win.image[win.currentIndex])
+            elif win.nDims == 2:
+                testimage = np.copy(win.image)
+            testimage = apply_hysteresis_threshold(testimage, low, high).astype(
+                np.uint8
+            )
+            win.imageview.setImage(testimage, autoLevels=False)
+            win.imageview.setLevels(-0.1, 1.1)
+        else:
+            win.reset()
+
+
+hysteresis_threshold = Hysteresis_Threshold()
+
+
+class Multi_Otsu_Threshold(BaseProcess):
+    """Computes multi-Otsu thresholds and returns a labeled image.
+
+    Each pixel is assigned to one of the classes using
+    skimage.filters.threshold_multiotsu.
+
+    Parameters:
+        classes (int): Number of classes to threshold into (2-5)
+        keepSourceWindow (bool): If True, don't close the source window
+
+    Returns:
+        newWindow: A new window with the class-labeled image
+    """
+
+    def gui(self) -> None:
+        self.gui_reset()
+        classes = QtWidgets.QSpinBox()
+        classes.setRange(2, 5)
+        classes.setValue(3)
+        self.items.append(
+            {"name": "classes", "string": "Number of Classes", "object": classes}
+        )
+        super().gui()
+
+    def __call__(
+        self, classes: int, keepSourceWindow: bool = False
+    ) -> flika.window.Window | None:
+        from skimage.filters import threshold_multiotsu
+
+        self.start(keepSourceWindow)
+        tif = np.copy(self.tif)
+        if tif.ndim == 2:
+            thresholds = threshold_multiotsu(tif, classes=classes)
+            self.newtif = np.digitize(tif, bins=thresholds).astype(np.float64)
+        elif tif.ndim == 3:
+            result = np.zeros(tif.shape, dtype=np.float64)
+            for i in range(len(tif)):
+                thresholds = threshold_multiotsu(tif[i], classes=classes)
+                result[i] = np.digitize(tif[i], bins=thresholds).astype(np.float64)
+            self.newtif = result
+        self.newname = f"{self.oldname} - Multi Otsu {classes} classes"
+        return self.end()
+
+
+multi_otsu_threshold = Multi_Otsu_Threshold()
