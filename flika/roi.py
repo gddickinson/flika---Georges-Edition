@@ -680,16 +680,24 @@ class ROI_rectangle(ROI_Base, pg.ROI):
         if y1<0: y1=0
 
         tif=self.window.image
-        #if self.window.imageview.hasTimeAxis():
-        if self.window.mt > 1:
-            mt, mx, my = tif.shape[:3]
+        is_rgb = self.window.metadata.get('is_rgb', False)
+        # The image has a leading (time/depth) axis unless it is 2D or a 3D RGB still.
+        has_leading_axis = tif.ndim >= 3 and not (tif.ndim == 3 and is_rgb)
+        if has_leading_axis:
+            mx, my = tif.shape[1], tif.shape[2]
             if x2>=mx: x2=mx-1
             if y2>=my: y2=my-1
+            if x2<=x1 or y2<=y1:
+                g.alert('Cannot crop: ROI lies outside the image.')
+                return None
             newtif=tif[:,x1:x2,y1:y2]
         else:
             mx, my = tif.shape[:2]
             if x2>=mx: x2=mx-1
             if y2>=my: y2=my-1
+            if x2<=x1 or y2<=y1:
+                g.alert('Cannot crop: ROI lies outside the image.')
+                return None
             newtif=tif[x1:x2,y1:y2]
 
         w =  Window(newtif, self.window.name+' Cropped', metadata=self.window.metadata)

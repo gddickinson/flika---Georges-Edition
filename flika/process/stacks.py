@@ -12,7 +12,7 @@ from ..utils.ndim import per_plane
 
 
 
-__all__ = ['deinterleave','trim','zproject','image_calculator', 'pixel_binning', 'frame_binning', 'resize', 'concatenate_stacks', 'duplicate', 'generate_random_image', 'generate_phantom_volume', 'change_datatype', 'shear_transform', 'motion_correction', 'frame_remover']
+__all__ = ['deinterleave','trim','zproject','image_calculator', 'pixel_binning', 'frame_binning', 'resize', 'concatenate_stacks', 'duplicate', 'generate_random_image', 'generate_phantom_volume', 'change_datatype', 'shear_transform', 'motion_correction', 'frame_remover', 'rotate_90', 'rotate_custom', 'flip_image']
 
 def duplicate():
     old = g.win
@@ -1068,6 +1068,152 @@ class Frame_Remover(BaseProcess):
 
 
 frame_remover = Frame_Remover()
+
+
+class Rotate_90(BaseProcess):
+    """rotate_90(direction='clockwise', keepSourceWindow=False)
+
+    Rotates the image by 90 degrees.
+
+    Parameters:
+        direction (str): 'Clockwise' or 'Counter-clockwise'.
+    Returns:
+        newWindow
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def get_init_settings_dict(self):
+        return {'direction': 'Clockwise'}
+
+    def gui(self):
+        self.gui_reset()
+        direction = ComboBox()
+        direction.addItems(['Clockwise', 'Counter-clockwise'])
+        self.items.append({'name': 'direction', 'string': 'Direction', 'object': direction})
+        super().gui()
+
+    def __call__(self, direction='Clockwise', keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        k = 1 if direction == 'Clockwise' else -1
+        if self.tif.ndim == 3:
+            self.newtif = np.array([np.rot90(frame, k=k) for frame in self.tif])
+        elif self.tif.ndim == 4:
+            self.newtif = np.array([[np.rot90(plane, k=k)
+                                     for plane in vol] for vol in self.tif])
+        else:
+            self.newtif = np.rot90(self.tif, k=k)
+        self.newname = self.oldname + f' - Rotated 90° {direction}'
+        return self.end()
+
+
+rotate_90 = Rotate_90()
+
+
+class Rotate_Custom(BaseProcess):
+    """rotate_custom(angle=0.0, reshape=True, order=1, keepSourceWindow=False)
+
+    Rotates the image by an arbitrary angle using scipy.ndimage.rotate.
+
+    Parameters:
+        angle (float): Rotation angle in degrees (positive = counter-clockwise).
+        reshape (bool): If True, the output is resized to contain the whole rotated image.
+        order (int): Spline interpolation order (0=nearest, 1=bilinear, 3=cubic).
+    Returns:
+        newWindow
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def get_init_settings_dict(self):
+        return {'angle': 0.0, 'reshape': True, 'order': 1}
+
+    def gui(self):
+        self.gui_reset()
+        from qtpy import QtWidgets as QtW
+        angle = QtW.QDoubleSpinBox()
+        angle.setRange(-360, 360)
+        angle.setDecimals(2)
+        angle.setSingleStep(1.0)
+        angle.setValue(0.0)
+        reshape = CheckBox()
+        reshape.setChecked(True)
+        order = ComboBox()
+        order.addItems(['0 - Nearest', '1 - Bilinear', '3 - Cubic'])
+        order.setCurrentIndex(1)
+        self.items.append({'name': 'angle', 'string': 'Angle (degrees)', 'object': angle})
+        self.items.append({'name': 'reshape', 'string': 'Resize output', 'object': reshape})
+        self.items.append({'name': 'order', 'string': 'Interpolation', 'object': order})
+        super().gui()
+
+    def __call__(self, angle=0.0, reshape=True, order=1, keepSourceWindow=False):
+        from scipy.ndimage import rotate as ndi_rotate
+        self.start(keepSourceWindow)
+        if isinstance(order, str):
+            order = int(order[0])
+        if self.tif.ndim == 3:
+            frames = []
+            for t in range(self.tif.shape[0]):
+                frames.append(ndi_rotate(self.tif[t], angle, reshape=reshape,
+                                         order=order, mode='constant', cval=0))
+            self.newtif = np.array(frames)
+        elif self.tif.ndim == 4:
+            result = []
+            for t in range(self.tif.shape[0]):
+                planes = []
+                for z in range(self.tif.shape[1]):
+                    planes.append(ndi_rotate(self.tif[t, z], angle, reshape=reshape,
+                                             order=order, mode='constant', cval=0))
+                result.append(np.array(planes))
+            self.newtif = np.array(result)
+        else:
+            self.newtif = ndi_rotate(self.tif, angle, reshape=reshape,
+                                     order=order, mode='constant', cval=0)
+        self.newname = self.oldname + f' - Rotated {angle}°'
+        return self.end()
+
+
+rotate_custom = Rotate_Custom()
+
+
+class Flip_Image(BaseProcess):
+    """flip_image(direction='Horizontal', keepSourceWindow=False)
+
+    Flips (mirrors) the image along the chosen axis.
+
+    Parameters:
+        direction (str): 'Horizontal' (left-right) or 'Vertical' (up-down).
+    Returns:
+        newWindow
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def get_init_settings_dict(self):
+        return {'direction': 'Horizontal'}
+
+    def gui(self):
+        self.gui_reset()
+        direction = ComboBox()
+        direction.addItems(['Horizontal', 'Vertical'])
+        self.items.append({'name': 'direction', 'string': 'Flip Direction', 'object': direction})
+        super().gui()
+
+    def __call__(self, direction='Horizontal', keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        if direction == 'Horizontal':
+            flip_axis = -1
+        else:
+            flip_axis = -2
+        self.newtif = np.flip(self.tif, axis=flip_axis).copy()
+        self.newname = self.oldname + f' - Flipped {direction}'
+        return self.end()
+
+
+flip_image = Flip_Image()
 
 
 logger.debug("Completed 'reading process/stacks.py'")

@@ -566,14 +566,26 @@ def open_tiff(filename, metadata):
         g.alert(f"Unable to open {filename}. {s}")
         return None
     metadata = get_metadata_tiff(Tiff)
-    A = Tiff.asarray()
+    series0 = Tiff.series[0]
+    series_axes = series0.axes
+    # Multi-position OME-TIFF (e.g. MicroManager with Positions > 1) references
+    # sibling files as one logical dataset. For a single file we only want its
+    # own pages, so strip the position axis and read pages directly.
+    if 'R' in series_axes and len(Tiff.pages) < int(np.prod(series0.shape)):
+        r_idx = series_axes.index('R')
+        expected_shape = series0.shape[:r_idx] + series0.shape[r_idx + 1:]
+        A = np.stack([p.asarray() for p in Tiff.pages]).reshape(expected_shape)
+        stack_axes = series_axes.replace('R', '')
+    else:
+        A = Tiff.asarray()
+        stack_axes = series_axes
     Tiff.close()
     _axes_labels = {
         'X': 'width', 'Y': 'height', 'Z': 'depth',
         'S': 'sample', 'T': 'time', 'C': 'channel',
         'I': 'series', 'Q': 'other',
     }
-    axes = [_axes_labels.get(ax, ax) for ax in Tiff.series[0].axes]
+    axes = [_axes_labels.get(ax, ax) for ax in stack_axes]
     # print("Original Axes = {}".format(Tiff.series[0].axes)) #sample means RBGA, plane means frame, width means X, height means Y
     try:
         assert len(axes) == len(A.shape)
@@ -1071,15 +1083,24 @@ def get_metadata_tiff(Tiff):
     if hasattr(page0, 'is_micromanager') and page0.is_micromanager:
         imagej_tags_unpacked = {}
         if hasattr(page0, 'imagej_tags'):
-            imagej_tags = page0.imagej_tags
-            imagej_tags['info']
-            imagej_tags_unpacked = json.loads(imagej_tags['info'])
-        micromanager_metadata = page0.tags['micromanager_metadata']
-        metadata = {**micromanager_metadata.value, **imagej_tags_unpacked}
+            try:
+                imagej_tags = page0.imagej_tags
+                imagej_tags_unpacked = json.loads(imagej_tags['info'])
+            except (KeyError, AttributeError, TypeError, ValueError):
+                imagej_tags_unpacked = {}
+        mm_meta = {}
+        if 'micromanager_metadata' in page0.tags:
+            mm_meta = page0.tags['micromanager_metadata'].value
+        elif hasattr(Tiff, 'micromanager_metadata') and Tiff.micromanager_metadata:
+            mm_meta = Tiff.micromanager_metadata.get('Summary', Tiff.micromanager_metadata)
+        metadata = {**mm_meta, **imagej_tags_unpacked}
         if 'Frames' in metadata and metadata['Frames'] > 1:
-            timestamps = [c.tags['micromanager_metadata'].value['ElapsedTime-ms'] for c in Tiff.pages]
-            metadata['timestamps'] = timestamps
-            metadata['timestamp_units'] = 'ms'
+            try:
+                timestamps = [c.tags['micromanager_metadata'].value['ElapsedTime-ms'] for c in Tiff.pages]
+                metadata['timestamps'] = timestamps
+                metadata['timestamp_units'] = 'ms'
+            except (KeyError, AttributeError):
+                pass
         keys_to_remove = ['NextFrame', 'ImageNumber', 'Frame', 'FrameIndex']
         for key in keys_to_remove:
             metadata.pop(key, None)

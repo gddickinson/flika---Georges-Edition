@@ -13,7 +13,7 @@ from .. import global_vars as g
 from ..utils.BaseProcess import (BaseProcess, SliderLabel, CheckBox, ComboBox,
                                  MissingWindowError)
 
-__all__ = ['background_subtract']
+__all__ = ['background_subtract', 'scaled_average_subtract']
 
 
 # ---------------------------------------------------------------------------
@@ -385,5 +385,92 @@ class Background_Subtract(BaseProcess):
 
 
 background_subtract = Background_Subtract()
+
+
+class Scaled_Average_Subtract(BaseProcess):
+    """scaled_average_subtract(window_size=50, average_size=100, keepSourceWindow=False)
+
+    Subtracts a scaled average image of the peak response from each frame.
+    Useful for isolating local calcium puffs from a global calcium wave.
+
+    Uses a rolling average of the ROI trace to find the peak frame, then
+    averages frames around the peak to create a template image. This template
+    is scaled frame-by-frame by the normalized rolling average and subtracted.
+
+    Parameters:
+        window_size (int): Number of frames for the rolling average window.
+        average_size (int): Number of frames around the peak to average.
+    Returns:
+        newWindow
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def get_init_settings_dict(self):
+        return {'window_size': 50, 'average_size': 100}
+
+    def gui(self):
+        self.gui_reset()
+        window_size = SliderLabel(0)
+        window_size.setRange(1, 10000)
+        window_size.setValue(50)
+        average_size = SliderLabel(0)
+        average_size.setRange(1, 10000)
+        average_size.setValue(100)
+        self.items.append({'name': 'window_size', 'string': 'Rolling Average Window',
+                           'object': window_size})
+        self.items.append({'name': 'average_size', 'string': 'Peak Average Frames',
+                           'object': average_size})
+        super().gui()
+
+    def __call__(self, window_size=50, average_size=100, keepSourceWindow=False):
+        self.start(keepSourceWindow)
+        A = self.tif.astype(np.float64)
+        if A.ndim < 3:
+            g.alert('Scaled Average Subtract requires a 3D stack')
+            return None
+
+        frames, height, width = A.shape
+
+        # Get ROI trace or use whole-frame mean
+        win = g.win
+        if win is not None and win.currentROI is not None:
+            trace = np.asarray(win.currentROI.getTrace(), dtype=np.float64)
+        else:
+            trace = np.mean(A.reshape(frames, -1), axis=1)
+
+        # Rolling average
+        kernel = np.ones(window_size) / window_size
+        if len(trace) < window_size:
+            g.alert('Stack has fewer frames than the rolling average window')
+            return None
+        moving_avg = np.convolve(trace, kernel, mode='valid')
+        moving_avg[moving_avg <= 0] = 1e-7
+
+        # Find peak frame
+        peak_frame = np.argmax(moving_avg)
+
+        # Average frames around peak
+        half = average_size // 2
+        start = max(0, peak_frame - half)
+        end = min(frames, peak_frame + half)
+        average_image = np.mean(A[start:end], axis=0)
+
+        # Scale the average image by normalized moving average and subtract
+        scale = moving_avg / np.max(moving_avg)
+        offset = window_size // 2
+        trim_end = offset + len(scale)
+
+        result = np.zeros_like(A)
+        scaled_stack = average_image[np.newaxis, :, :] * scale[:, np.newaxis, np.newaxis]
+        result[offset:trim_end] = A[offset:trim_end] - scaled_stack
+
+        self.newtif = result
+        self.newname = self.oldname + ' - Scaled Avg Subtracted'
+        return self.end()
+
+
+scaled_average_subtract = Scaled_Average_Subtract()
 
 logger.debug("Completed 'reading process/background.py'")
